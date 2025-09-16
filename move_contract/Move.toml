@@ -1,0 +1,26 @@
+[package]
+name = "stellaris"
+version = "1.0.0"
+authors = []
+
+[addresses]
+stellaris = "0x0c68cc8e9a850153992716cd2fc581d4a13470565cbe4d49b5c002322e8a93fc"
+owner = "0x0c68cc8e9a850153992716cd2fc581d4a13470565cbe4d49b5c002322e8a93fc"
+origin = "0x1"
+data_feeds = "0xf1099f135ddddad1c065203431be328a408b0ca452ada70374ce26bd2b32fdd3"
+platform = "0x516e771e1b4a903afe74c27d057c65849ecc1383782f6642d7ff21425f4f9c99"
+[dev-addresses]
+
+[dependencies.AptosFramework]
+git = "https://github.com/aptos-labs/aptos-framework.git"
+rev = "mainnet"
+subdir = "aptos-framework"
+
+[dependencies.FixedPoint64]
+git = "https://github.com/ThalaLabs/fixed_point64.git"
+rev = "main"
+
+[dependencies.ChainlinkDataFeeds]
+local = "./ChainlinkDataFeeds"
+
+[dev-dependencies]

@@ -1,0 +1,1 @@
+module stellaris::router {}

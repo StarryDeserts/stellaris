@@ -1,0 +1,20 @@
+[package]
+name = "ChainlinkDataFeeds"
+version = "1.0.0"
+authors = []
+
+[addresses]
+data_feeds = "0xf1099f135ddddad1c065203431be328a408b0ca452ada70374ce26bd2b32fdd3"
+owner = "0x0c68cc8e9a850153992716cd2fc581d4a13470565cbe4d49b5c002322e8a93fc"
+platform = "0x516e771e1b4a903afe74c27d057c65849ecc1383782f6642d7ff21425f4f9c99"
+
+[dev-addresses]
+data_feeds = "0x100"
+owner = "0xcafe"
+platform = "0xbaba"
+
+[dependencies]
+AptosFramework = { git = "https://github.com/aptos-labs/aptos-framework.git", rev = "mainnet", subdir = "aptos-framework" }
+ChainlinkPlatform = { local = "../ChainlinkPlatform" }
+
+[dev-dependencies]
