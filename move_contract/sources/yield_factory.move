@@ -4,7 +4,7 @@ module stellaris::yield_factory {
     use std::signer;
     use std::string::String;
     use aptos_std::math64;
-    use aptos_std::smart_table::SmartTable;
+    use aptos_std::smart_table::{Self, SmartTable};
     use aptos_framework::event;
     use aptos_framework::fungible_asset;
     use aptos_framework::fungible_asset::{FungibleStore, Metadata, FungibleAsset};
@@ -15,7 +15,7 @@ module stellaris::yield_factory {
     use fixed_point64::fixed_point64;
     use fixed_point64::fixed_point64::FixedPoint64;
     use stellaris::py_position;
-    use stellaris::package_manager::{is_owner, get_resource_address};
+    use stellaris::package_manager::{is_owner, get_resource_address, get_signer};
     use stellaris::sy;
     use stellaris::py_position::PyPosition;
     use stellaris::py::PyState;
@@ -68,14 +68,26 @@ module stellaris::yield_factory {
         treasury: address,
     }
 
-    // fun init_moudle(publisher: &signer) {
-    //     assert!(is_owner(signer::address_of(publisher)), error::not_implemented(10001));
-    //     let config = YieldFactoryConfig {
-    //         tokens: smart_table::new<String, String>(),
-    //         token_datas: smart_table::new<String, TokenData>()
-    //     };
-    //     move_to(&get_signer(), registry);
-    // }
+    fun init_module(publisher: &signer) {
+        // 确保只有模块的发布者（或指定的管理员）才能初始化
+        // 注意: is_owner 和 get_resource_address 需要你根据 package_manager 的实现来确定
+        assert!(is_owner(signer::address_of(publisher)), error::permission_denied(10001));
+
+        // 初始化 YieldFactoryConfig 结构体
+        let config = YieldFactoryConfig {
+            // 设置利息费率为 10%
+            interest_fee_rate: fixed_point64::fraction_u128(1, 20), // 1/20 = 5%
+            // 设置到期日除数为一天的毫秒数，强制到期日按天对齐
+            expiry_divisor: 86400000, // 24 * 60 * 60 * 1000
+            // 国库地址，初始可以设置为发布者地址或一个专用的多签地址
+            treasury: @origin,
+            // 初始化一个空的 vault (保险库)
+            vault: smart_table::new<address, Object<FungibleStore>>()
+        };
+
+        // 将配置作为资源存储在模块发布者的账户下
+        move_to(&get_signer(), config);
+    }
 
 
      /// 负责为一个新的到期日创建一个全新的 PyState 池

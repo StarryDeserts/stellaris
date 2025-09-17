@@ -632,4 +632,10 @@ module stellaris::py {
         seeds_vector
     }
 
+    #[view]
+    public fun get_all_py_states(): vector<address> acquires PyStore {
+        let py_store = borrow_global<PyStore>(get_resource_address());
+        py_store.all_py_states.to_vector()
+    }
+
 }

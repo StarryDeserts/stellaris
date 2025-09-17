@@ -61,6 +61,11 @@ module stellaris::market_global {
         config.reserve_fee_percent
     }
 
+    #[view]
+    public fun get_all_markets() :vector<address> acquires MarketFactoryConfig {
+        let config = borrow_global<MarketFactoryConfig>(package_manager::get_resource_address());
+        config.markets.to_vector()
+    }
 
     
 }
