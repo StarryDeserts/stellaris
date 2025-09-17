@@ -4,14 +4,15 @@ module stellaris::py {
     use std::error;
     use std::signer;
     use std::string::String;
-    use aptos_std::smart_vector::SmartVector;
+    use aptos_std::smart_vector::{Self, SmartVector};
     use aptos_framework::event;
     use aptos_framework::fungible_asset::{Self, FungibleStore, Metadata, FungibleAsset, create_store, store_metadata};
     use aptos_framework::object::{Self, Object};
+    use aptos_framework::primary_fungible_store;
 
     use fixed_point64::fixed_point64::{Self, FixedPoint64};
     use stellaris::sy;
-    use stellaris::package_manager::{Self, get_signer, get_resource_address};
+    use stellaris::package_manager::{Self, is_owner, get_signer, get_resource_address};
 
     use stellaris::utils;
     use stellaris::token_registry;
@@ -22,7 +23,7 @@ module stellaris::py {
 
     // 全局注册表，用于存储和索引协议中所有创建的 PyState 对象
     struct PyStore has key {
-        all_py_states: SmartVector<Object<PyState>> // 存储所有创建的 PyState 的 Object 地址
+        all_py_states: SmartVector<address> // 存储所有创建的 PyState 的 Object 地址
     }
 
     // 代表一个 SY 资产和特定到期日的收益剥离池
@@ -41,6 +42,11 @@ module stellaris::py {
         global_interest_index: FixedPoint64,
     }
 
+    struct FlashLoanPosition {
+        py_state_address: address,
+        amount: u64,
+    }
+
     #[event]
     struct RedeemTokenEvent has store, drop {
         base_asset_type_name: String,
@@ -55,7 +61,14 @@ module stellaris::py {
         amount: u64,
     }
 
-    // TODO: 这个模块的 init 方法还没有写
+    fun init_moudle(publisher: &signer) {
+        assert!(is_owner(signer::address_of(publisher)), error::not_implemented(10001));
+        let store = PyStore {
+            all_py_states: smart_vector::empty<address>()
+        };
+        move_to(&get_signer(), store);
+    }
+
 
     // 创建一个新的 py_state
     public(package) fun create_py(
@@ -85,7 +98,7 @@ module stellaris::py {
         };
         move_to(&py_state_signer, py_state);
         // 将新创建的 py_state 添加到 py_store 中
-        py_store.all_py_states.push_back(object::address_to_object<PyState>(signer::address_of(&py_state_signer)));
+        py_store.all_py_states.push_back(signer::address_of(&py_state_signer));
     }
 
     // 为用户创建一个新的个人头寸
@@ -105,8 +118,8 @@ module stellaris::py {
     }
 
     public(package) fun mint_py(
-        pt_amount_to_mint: u64,
         yt_amount_to_mint: u64,
+        pt_amount_to_mint: u64,
         py_state_object: Object<PyState>,
         user_position: Object<PyPosition>
     ) acquires PyState {
@@ -121,7 +134,7 @@ module stellaris::py {
         py_position::set_yt_balance(
             user_position,
             py_position::yt_balance(user_position) + yt_amount_to_mint
-        )
+        );
     }
 
     public(package) fun burn_py(
@@ -142,7 +155,7 @@ module stellaris::py {
         py_position::set_yt_balance(
             user_position,
             py_position::yt_balance(user_position) - yt_amount_to_mint
-        )
+        );
     }
 
     public(package) fun redeem_due_interest(
@@ -163,6 +176,7 @@ module stellaris::py {
 
     /// 用户在市场到期后，将 PT 代币销毁以换取对应的 SY 代币
     public fun burn_pt(
+        user: &signer,
         amount: u64,
         pt_metadata_address: Object<Metadata>,
         py_state_object: Object<PyState>,
@@ -178,9 +192,10 @@ module stellaris::py {
             user_position,
             py_position::pt_balance(user_position) + amount
         );
+        let user_pt_balance = primary_fungible_store::withdraw(user, pt_metadata_address, amount);
         burn_token(
             amount,
-            pt_metadata_address,
+            user_pt_balance,
             user_position,
             sy_type_name,
             pt_type_name,
@@ -190,7 +205,7 @@ module stellaris::py {
 
     fun burn_token(
         amount: u64,
-        token_metadata_address: Object<Metadata>,
+        user_pt_balance: FungibleAsset,
         user_position: Object<PyPosition>,
         base_asset_type_name: String,
         burn_asset_type_name: String,
@@ -205,8 +220,8 @@ module stellaris::py {
         // 正式进行销毁
         token_registry::burn_with_expiry(
             amount,
+            user_pt_balance,
             py_position::expiry(user_position),
-            token_metadata_address,
             base_asset_type_name,
             burn_asset_type_name
         );
@@ -260,6 +275,48 @@ module stellaris::py {
         )
     }
 
+    public(package) fun borrow_pt_amount(
+        user_position: Object<PyPosition>,
+        borrow_amount: u64,
+        py_state: Object<PyState>
+    ) :(u64, FlashLoanPosition) acquires PyState {
+        mint_py(
+            0,
+            borrow_amount,
+            py_state,
+            user_position
+        );
+        // 创建闪电贷头寸记录
+        let flash_loan_pos = FlashLoanPosition {
+            py_state_address: object::object_address(&py_state),
+            amount: borrow_amount
+        };
+        (borrow_amount, flash_loan_pos)
+    }
+
+    public fun repay_pt_amount(
+        user_position: Object<PyPosition>,
+        py_state: Object<PyState>,
+        flash_loan_position: FlashLoanPosition,
+    ) : u64 acquires PyState {
+        // 确保偿还的头寸是针对当前正确的 PyState
+        assert!(object::object_address(&py_state) == flash_loan_position.py_state_address, error::invalid_argument(33));
+        // 核心操作：销毁 PY(减少用户的PT余额和全局供应量，即销毁债务)
+        burn_py(
+            flash_loan_position.amount,
+            0,
+            py_state,
+            user_position
+        );
+        // 解构FlashLoanPosition，取出amount并返回，同时丢弃该结构体（因为债务已清偿）
+        let FlashLoanPosition {
+            py_state_address : _,
+            amount      : repaid_amount,
+        } = flash_loan_position;
+
+        repaid_amount
+    }
+
     public(package) fun join_sy(
         py_state_object: Object<PyState>,
         sy_balance: FungibleAsset
@@ -268,7 +325,6 @@ module stellaris::py {
         fungible_asset::deposit(py_state.sy_balance, sy_balance);
     }
 
-    /// TODO: 等我把 package_manager 类写好，这里应该是 resource account 的签名
     public(package) fun split_sy(
         amount: u64,
         py_state_object: Object<PyState>

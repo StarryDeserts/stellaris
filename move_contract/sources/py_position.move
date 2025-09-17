@@ -11,7 +11,6 @@ module stellaris::py_position {
     const ONE_DAYS_MILLISECOND:u64 = 86400000;
     const SCALING_FACTOR:u64 = 100000000;
 
-    // TODO: 嫌麻烦或许可以加上 pt_balance_display 和 yt_balance_display
     struct PyPosition has key {
         py_state_id: address,
         name: String,

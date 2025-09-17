@@ -10,7 +10,6 @@ module stellaris::acl {
         permissions: SmartTable<u8, ACL>
     }
 
-    /// TODO: 这样做的话需要初始化角色的数量
      fun init_module(publisher: &signer) {
          let acl_m = ACLManager {
              permissions: smart_table::new<u8, ACL>()

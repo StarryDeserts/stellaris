@@ -1,5 +1,6 @@
 module stellaris::oracle {
     use std::error;
+    use std::signer;
     use aptos_std::smart_table;
     use aptos_std::smart_table::SmartTable;
     use aptos_framework::timestamp;
@@ -23,9 +24,7 @@ module stellaris::oracle {
     }
 
     fun init_module(account: &signer) {
-
-
-
+        assert!(package_manager::is_owner(signer::address_of(account)), error::not_implemented(10001));
         move_to(
             &package_manager::get_signer(),
             PriceOracleData {
@@ -35,7 +34,7 @@ module stellaris::oracle {
     }
 
     public entry fun set_asset_feed_id(
-        account: &signer, asset: address, feed_id: vector<u8>
+        asset: address, feed_id: vector<u8>
     ) acquires PriceOracleData {
         assert!(!feed_id.is_empty(), error::not_found(E_EMPTY_FEED_ID));
         update_asset_feed_id(asset, feed_id);
@@ -77,7 +76,7 @@ module stellaris::oracle {
     }
 
     fun validate_oracle_timestamp(
-        asset: address, price_timestamp_secs: u256
+        price_timestamp_secs: u256
     ) {
         let current_time_secs = timestamp::now_seconds() as u256;
         // ensure oracle timestamp is not from the future
@@ -101,7 +100,7 @@ module stellaris::oracle {
             let price = chainlink::get_benchmark_value(benchmark);
             validate_oracle_price(price);
             let timestamp = chainlink::get_benchmark_timestamp(benchmark);
-            validate_oracle_timestamp(asset, timestamp);
+            validate_oracle_timestamp(timestamp);
             return (price, timestamp);
         };
 

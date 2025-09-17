@@ -15,7 +15,7 @@ module stellaris::yield_factory {
     use fixed_point64::fixed_point64;
     use fixed_point64::fixed_point64::FixedPoint64;
     use stellaris::py_position;
-    use stellaris::package_manager::{get_signer, get_resource_address};
+    use stellaris::package_manager::{is_owner, get_resource_address};
     use stellaris::sy;
     use stellaris::py_position::PyPosition;
     use stellaris::py::PyState;
@@ -68,6 +68,15 @@ module stellaris::yield_factory {
         treasury: address,
     }
 
+    // fun init_moudle(publisher: &signer) {
+    //     assert!(is_owner(signer::address_of(publisher)), error::not_implemented(10001));
+    //     let config = YieldFactoryConfig {
+    //         tokens: smart_table::new<String, String>(),
+    //         token_datas: smart_table::new<String, TokenData>()
+    //     };
+    //     move_to(&get_signer(), registry);
+    // }
+
 
      /// 负责为一个新的到期日创建一个全新的 PyState 池
     public fun create(
@@ -92,8 +101,7 @@ module stellaris::yield_factory {
     }
 
     public(package) fun mint_py_internal(
-        user: &signer,
-        sy_amount: u64,
+        sy_balance: FungibleAsset,
         current_index_for_oracle: FixedPoint64,
         user_py_position: Object<PyPosition>,
         py_state_object: Object<PyState>
@@ -103,15 +111,11 @@ module stellaris::yield_factory {
         let amount_to_mint = fixed_point64::decode_round_down(
           sy::sy_to_asset(
               py::current_py_index(py_state_object, current_index_for_oracle),
-              fixed_point64::encode(sy_amount)
+              fixed_point64::encode(fungible_asset::amount(&sy_balance))
           )
         );
         // 3. 将用户传入的 SY FA 对象存入 PyState 的资金池中
-        let sy_metatda = fungible_asset::store_metadata(py::sy_metadata_address(py_state_object));
-        let if_sy = primary_fungible_store::is_balance_at_least(signer::address_of(user), sy_metatda, sy_amount);
-        // 确保用户有足够数量的 sy 资产
-        assert!(if_sy, error::aborted(13));
-        let sy_balance = primary_fungible_store::withdraw(user, sy_metatda, sy_amount);
+        let user_sy_amount = fungible_asset::amount(&sy_balance);
         py::join_sy(py_state_object, sy_balance);
         // 4. 更新用户的利息记录并计算协议费用
         let protocol_fee = py::update_user_interest(
@@ -122,9 +126,10 @@ module stellaris::yield_factory {
         );
 
         // 5. 将计算出的协议费用存入全局的 vault 中
-        deposit_to_vault(
+        deposit_to_vault_internal(
             protocol_fee,
-            py_state_object
+            py_state_object,
+            config
         );
 
         // 6. 为用户实际铸造 PT 和 YT，并更新其个人仓位 `user_py_position`
@@ -133,7 +138,7 @@ module stellaris::yield_factory {
         // 7. 发出 MintPyEvent 事件
         event::emit(MintPyEvent{
             py_state_address: object::object_address(&py_state_object),
-            share_in: sy_amount,
+            share_in: user_sy_amount,
             amount_pt: amount_to_mint,
             amount_yt: amount_to_mint,
             expiry: py_position::expiry(user_py_position),
@@ -162,9 +167,10 @@ module stellaris::yield_factory {
                 exchange_rate,
                 py_state_object
             );
-            deposit_to_vault(
+            deposit_to_vault_internal(
                 protocol_fee,
-                py_state_object
+                py_state_object,
+                config
             );
             pt_amount_to_redeem
         } else {
@@ -184,9 +190,10 @@ module stellaris::yield_factory {
                 user_py_position,
                 py_state_object
             );
-            deposit_to_vault(
+            deposit_to_vault_internal(
                 protocol_fee,
-                py_state_object
+                py_state_object,
+                config
             );
             // 销毁 YT
             py::burn_py(0, yt_amount_to_redeem, py_state_object, user_py_position);
@@ -232,12 +239,12 @@ module stellaris::yield_factory {
     }
 
     // 将协议费用存入金库保险箱
-    fun deposit_to_vault(
+    fun deposit_to_vault_internal(
         fee_amount: FixedPoint64,
-        py_state_object: Object<PyState>
-    ) acquires YieldFactoryConfig {
+        py_state_object: Object<PyState>,
+        config: &mut YieldFactoryConfig
+    ) {
         // 1. 检查 vault 中是否已经有该类型的 SY 代币余额
-        let config = borrow_global_mut<YieldFactoryConfig>(get_resource_address());
         let sy_metatda = fungible_asset::store_metadata(py::sy_metadata_address(py_state_object));
         let sy_address = object::object_address(&sy_metatda);
         if (!config.vault.contains(sy_address)) {
@@ -255,6 +262,33 @@ module stellaris::yield_factory {
         };
     }
 
+    public(package) fun deposit_to_vault(
+        fee_amount: FixedPoint64,
+        py_state_object: Object<PyState>
+    ) acquires YieldFactoryConfig {
+        // 1. 检查 vault 中是否已经有该类型的 SY 代币余额
+        let config = borrow_global_mut<YieldFactoryConfig>(get_resource_address());
+        let sy_metatda = fungible_asset::store_metadata(py::sy_metadata_address(py_state_object));
+        let sy_address = object::object_address(&sy_metatda);
+        if (!config.vault.contains(sy_address)) {
+            // 如果没有，则初始化一个该类型的 FungibleStore
+            let sy_store = fungible_asset::create_store(&object::create_object(get_resource_address()), sy_metatda);
+            config.vault.add(sy_address, sy_store);
+        };
+        // 2. 检查费用金额是否大于 0
+        if (fixed_point64::gt(&fee_amount, &fixed_point64::zero())){
+            // 3. 从 PyState 池中分离出费用
+            let fee_balance = py::split_sy(fixed_point64::decode_round_up(fee_amount), py_state_object);
+            let vault_store = config.vault.borrow_mut(sy_address);
+            // 将提取出来的 fee_balance 存入 vault 中
+            fungible_asset::deposit(*vault_store, fee_balance);
+        };
+    }
+
+    public(package) fun interest_fee_rate() : FixedPoint64 acquires YieldFactoryConfig {
+        let config = borrow_global<YieldFactoryConfig>(get_resource_address());
+        config.interest_fee_rate
+    }
 
 
     public fun update_config(

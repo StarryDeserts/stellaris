@@ -9,7 +9,7 @@ module stellaris::market {
     use aptos_framework::primary_fungible_store;
     use aptos_framework::object::{Self, Object};
     use fixed_point64::fixed_point64::{Self, FixedPoint64};
-    use aptos_framework::fungible_asset::{Self, FungibleStore, FungibleAsset, Metadata};
+    use aptos_framework::fungible_asset::{Self, FungibleStore, FungibleAsset};
     use stellaris::oracle;
 
     use stellaris::sy;
@@ -45,7 +45,7 @@ module stellaris::market {
 
     /// 这是一个临时的、仅在函数调用期间存在的“快照”结构体
     /// 它通过一次性计算，将 MarketPool 中多个原始参数转换并缓存为 market_math 模块中直接需要的衍生参数
-    struct MarketPoolCache {
+    struct MarketPoolCache has copy, drop {
         total_asset: FixedPoint64,
         rate_scalar: FixedPoint64WithSign,
         rate_anchor: FixedPoint64WithSign,
@@ -108,7 +108,7 @@ module stellaris::market {
     }
 
 
-    public fun get_market_pool_cache(
+    public fun get_market_pool_cache_internal(
         current_price_from_oracle: FixedPoint64,
         market_pool: &MarketPool,
         py_state: Object<PyState>,
@@ -121,7 +121,33 @@ module stellaris::market {
             time_to_expire_val,
             current_py_index_val
         ) = get_market_state(current_price_from_oracle, py_state, market_pool);
-        // 2. 将返回的元组值组装成 MarketStateCache 结构体
+        // 2. 将返回的元组值组装成 MarketPoolCache 结构体
+        MarketPoolCache {
+            total_asset: total_asset_val,
+            rate_scalar: rate_scalar_val,
+            rate_anchor: rate_anchor_val,
+            fee_rate: fee_rate_val,
+            time_to_expire: time_to_expire_val,
+            index: current_py_index_val,
+            exchange_rate: current_price_from_oracle, // 直接使用传入的预言机价格
+        }
+    }
+
+    public fun get_market_pool_cache(
+        current_price_from_oracle: FixedPoint64,
+        market_pool_object: Object<MarketPool>,
+        py_state: Object<PyState>,
+    ) :MarketPoolCache acquires MarketPool {
+        let market_pool= borrow_global<MarketPool>(object::object_address(&market_pool_object));
+        let (
+            total_asset_val,
+            rate_scalar_val,
+            rate_anchor_val,
+            fee_rate_val,
+            time_to_expire_val,
+            current_py_index_val
+        ) = get_market_state(current_price_from_oracle, py_state, market_pool);
+        // 2. 将返回的元组值组装成 MarketPoolCache 结构体
         MarketPoolCache {
             total_asset: total_asset_val,
             rate_scalar: rate_scalar_val,
@@ -170,8 +196,8 @@ module stellaris::market {
             market_pool.expiry
         );
         // 3. 从预言机获取当前汇率
-        let current_price = fixed_point64::encode(
-            (oracle::get_asset_price(object::object_address(&sy_metatda)) as u64)
+        let current_price = fixed_point64::from_u128(
+            (oracle::get_asset_price(object::object_address(&sy_metatda)) as u128)
         );
         let remaining_sy_coin = mint_lp_internal(
             pt_amount_to_add,
@@ -184,7 +210,7 @@ module stellaris::market {
             market_pool,
             object::object_address(&market_pool_object)
         );
-        check_market_cap(market_pool);
+        check_market_cap_internal(market_pool);
         assert!(market_position::lp_amount(new_market_position) >= min_lp_out, error::aborted(16)); // 检查产出的LP是否满足最小期望
         // 6. 返回多余的SY代币和新创建的LP头寸对象
         remaining_sy_coin
@@ -292,6 +318,108 @@ module stellaris::market {
         }
     }
 
+    public(package) fun mint_lp_out_internal(
+        pt_amount_in: u64,
+        sy_token_amount: u64,
+        user_sy_balance: FungibleAsset,
+        current_index_from_oracle: FixedPoint64,
+        user_py_position: Object<PyPosition>,
+        py_state: Object<PyState>,
+        user_market_position: Object<MarketPosition>,
+        market_pool_object: Object<MarketPool>
+    ) :FungibleAsset acquires MarketPool {
+        let market_pool = borrow_global_mut<MarketPool>(object::object_address(&market_pool_object));
+        // 逻辑分支：如果池子为空
+        if (market_pool.lp_supply == 0) {
+            // --- 分支 A: 初始化流动性池 (首次添加流动性) ---
+            // 1. 计算初始 LP 数量。公式为 PT 和 SY 数量的几何平均数。
+            let initial_lp_total = (math128::sqrt((pt_amount_in as u128) * (sy_token_amount as u128)) as u64);
+            // 确保初始流动性不低于一个阈值
+            assert!(initial_lp_total >= 1000, error::aborted(2));
+            // 2. 为了防止精度损失和三明治攻击，协议会永久锁定一小部分LP（1000个单位）
+            let user_lp_to_receive = initial_lp_total - 1000;
+            // 3. 更新状态
+            // 从用户的 PY 头寸中扣除 PT
+            py::split_pt(pt_amount_in, user_py_position);
+            market_pool.total_pt += pt_amount_in;
+            fungible_asset::deposit(market_pool.total_sy, fungible_asset::extract(&mut user_sy_balance, sy_token_amount));
+            market_pool.lp_supply = initial_lp_total;
+            // 4. 更新用户的LP头寸
+            market_position::set_lp_amount(user_market_position, user_lp_to_receive);
+            market_position::update_lp_display(user_market_position);
+            // 5. 初始化市场的隐含利率
+            let exchange_rate = get_exchange_rate(py_state, market_pool, current_index_from_oracle, true);
+            market_pool.last_ln_implied_rate = get_ln_implied_rate(exchange_rate, market_pool.expiry - utils::now_milliseconds());
+            assert!(!fixed_point64::eq(&market_pool.last_ln_implied_rate, &fixed_point64::zero()), error::invalid_argument(3));
+            // 发布添加流动性的事件
+            event::emit(AddLiquidityEvent {
+                market_state_address: object::object_address(&market_pool_object),
+                expiry: market_pool.expiry,
+                pt_amount: pt_amount_in,
+                sy_amount: sy_token_amount,
+                lp_amount: user_lp_to_receive,
+                exchange_rate,
+            });
+            // farming_reward::stake_rewarder()
+            user_sy_balance
+        } else {
+            // --- 分支 B: 向现有池中添加流动性 ---
+            // 1. 根据当前池中 PT 和 SY 的比例，计算出添加等值流动性应该获得的 LP 数量
+            let lp_from_pt = (((pt_amount_in as u128) * (market_pool.lp_supply as u128) / (market_pool.total_pt as u128)) as u64);
+            let lp_from_sy = (((sy_token_amount as u128) * (market_pool.lp_supply as u128) / (fungible_asset::balance(market_pool.total_sy) as u128)) as u64);
+            assert!(lp_from_pt > 0 && lp_from_sy > 0, error::invalid_argument(4));
+            // 2. 选择较小的一方作为本次获得的 LP 数量，以确保是按当前价格比例添加的。多余的另一种代币将被退还
+            if (lp_from_pt < lp_from_sy) {
+                // 以 PT 为准，计算需要多少 SY, 多余的 SY 将被退还
+                let user_lp_to_receive = lp_from_pt;
+                let sy_to_join_market = ((((fungible_asset::balance(market_pool.total_sy) as u128) * (user_lp_to_receive as u128) + ((market_pool.lp_supply - 1) as u128)) / (market_pool.lp_supply as u128)) as u64);
+                assert!(sy_to_join_market > 0, error::invalid_argument(5));
+                // 更新状态
+                market_pool.total_pt += pt_amount_in;
+                py::split_pt(pt_amount_in, user_py_position);
+                let sy_to_join_balance = fungible_asset::extract(&mut user_sy_balance, sy_to_join_market);
+                fungible_asset::deposit(market_pool.total_sy, sy_to_join_balance);
+                market_pool.lp_supply += user_lp_to_receive;
+                // 更新用户头寸
+                market_position::increase_lp_amount(user_market_position, user_lp_to_receive);
+                let _exchange_rate = get_exchange_rate(py_state, market_pool, current_index_from_oracle, false);
+                market_position::update_lp_display(user_market_position);
+                // 发布添加流动性的事件
+                event::emit(AddLiquidityEvent {
+                    market_state_address: object::object_address(&market_pool_object),
+                    expiry: market_pool.expiry,
+                    pt_amount: pt_amount_in,
+                    sy_amount: sy_token_amount,
+                    lp_amount: user_lp_to_receive,
+                    exchange_rate: _exchange_rate,
+                });
+                // farming_reward::stake_rewarder()
+                user_sy_balance
+            } else {
+                // 以 SY 为准，计算需要多少 PT，多余的 PT 将被退还
+                let _user_lp_to_receive = lp_from_sy;
+                let pt_to_join_market = ((((market_pool.total_pt as u128) * (_user_lp_to_receive as u128) + ((market_pool.lp_supply - 1) as u128)) / (market_pool.lp_supply as u128)) as u64);
+                assert!(pt_to_join_market > 0, error::invalid_argument(6));
+                // 更新状态
+                fungible_asset::deposit(market_pool.total_sy, fungible_asset::extract(&mut user_sy_balance, sy_token_amount));
+                py::split_pt(pt_to_join_market, user_py_position);
+                market_pool.total_pt += pt_to_join_market;
+                market_pool.lp_supply += _user_lp_to_receive;
+                // 发布添加流动性的事件
+                event::emit(AddLiquidityEvent {
+                    market_state_address: object::object_address(&market_pool_object),
+                    expiry: market_pool.expiry,
+                    pt_amount: pt_amount_in,
+                    sy_amount: sy_token_amount,
+                    lp_amount: _user_lp_to_receive,
+                    exchange_rate: get_exchange_rate(py_state, market_pool, current_index_from_oracle, false),
+                });
+                // farming_reward::stake_rewarder()
+                user_sy_balance
+            }
+        }
+    }
+
     public fun swap_sy_for_exact_pt(
         user: &signer,
         exact_pt_out: u64,
@@ -310,11 +438,11 @@ module stellaris::market {
         // 取出用户的 sy 资产
         let user_sy_balance = primary_fungible_store::withdraw(user, sy_metatda, sy_amount);
         // 3. 从预言机获取当前汇率
-        let current_price = fixed_point64::encode(
-            (oracle::get_asset_price(object::object_address(&sy_metatda)) as u64)
+        let current_price = fixed_point64::from_u128(
+            (oracle::get_asset_price(object::object_address(&sy_metatda)) as u128)
         );
         // 3. 生成市场状态缓存，为核心计算做准备
-        let market_cache = get_market_pool_cache(
+        let market_cache = get_market_pool_cache_internal(
             current_price,
             market_pool,
             py_state_object
@@ -334,6 +462,7 @@ module stellaris::market {
         received_sy_coin
     }
 
+    /// TODO: py_state_object 和 current_index_from_oracle 这个参数在方法内部没有被使用到
     public(package) fun swap_sy_for_exact_pt_internal(
         pt_amount_out: u64,
         user_sy_balance: FungibleAsset,
@@ -347,7 +476,7 @@ module stellaris::market {
         // 1. 调用交易核心函数进行计算
         // 买入 PT，对于池子来说是 PT 减少，所以 pt_delta 是正数。
         let pt_delta = fixed_point64_with_sign::from_uint64(pt_amount_out);
-        let (sy_in_gross, reserve_fee, trade_fee, new_rate_scalar, new_rate_anchor) = execute_trade_core(
+        let (sy_in_gross, reserve_fee, trade_fee, new_rate_scalar, new_rate_anchor) = execute_trade_core_internal(
             pt_delta,
             market_cache,
             market_pool,
@@ -395,6 +524,68 @@ module stellaris::market {
         user_sy_balance
     }
 
+    /// TODO: py_state_object 和 current_index_from_oracle 这个参数在方法内部没有被使用到
+    public(package) fun swap_sy_for_exact_pt_out_internal(
+        pt_amount_out: u64,
+        user_sy_balance: FungibleAsset,
+        user_py_position: Object<PyPosition>,
+        py_state_object: Object<PyState>,
+        current_index_from_oracle: FixedPoint64,
+        market_cache: &MarketPoolCache,
+        market_pool_object: Object<MarketPool>
+    ) :FungibleAsset acquires MarketPool {
+        let market_pool = borrow_global_mut<MarketPool>(object::object_address(&market_pool_object));
+        // 1. 调用交易核心函数进行计算
+        // 买入 PT，对于池子来说是 PT 减少，所以 pt_delta 是正数。
+        let pt_delta = fixed_point64_with_sign::from_uint64(pt_amount_out);
+        let (sy_in_gross, reserve_fee, trade_fee, new_rate_scalar, new_rate_anchor) = execute_trade_core_internal(
+            pt_delta,
+            market_cache,
+            market_pool,
+            object::object_address(&market_pool_object)
+        );
+
+        // 2. 从用户支付中分出非费用部分，加入市场流动性
+        let sy_in_including_fee = fixed_point64_with_sign::neg(sy_in_gross);
+        let sy_to_market_amount = fixed_point64_with_sign::truncate(fixed_point64_with_sign::sub(sy_in_including_fee, reserve_fee));
+        let sy_to_market_balance = fungible_asset::extract(&mut user_sy_balance, sy_to_market_amount);
+        fungible_asset::deposit(market_pool.total_sy, sy_to_market_balance);
+
+        // 从用户支付中分出费用部分，加入金库
+        let reserve_fee_amount = fixed_point64_with_sign::truncate(reserve_fee);
+        let reserve_fee_balance = fungible_asset::extract(&mut user_sy_balance, reserve_fee_amount);
+        fungible_asset::deposit(market_pool.total_sy, reserve_fee_balance);
+
+        // 3. 更新市场和用户状态
+        market_pool.total_pt -= pt_amount_out; // 市场 PT 减少
+        py::join_pt(pt_amount_out, user_py_position); // PT 加入用户头寸
+
+        // 4. 计算并更新交易后的市场汇率和隐含利率
+        let total_sy_asset_after_trade = sy::sy_to_asset(market_cache.index, fixed_point64::encode(fungible_asset::balance(market_pool.total_sy)));
+        let new_exchange_rate = market_math::get_exchange_rate(
+            fixed_point64_with_sign::from_uint64(fixed_point64::decode_round_down(total_sy_asset_after_trade)),
+            fixed_point64_with_sign::from_uint64(market_pool.total_pt),
+            new_rate_scalar,
+            new_rate_anchor,
+            fixed_point64_with_sign::zero()
+        );
+        market_pool.last_ln_implied_rate = get_ln_implied_rate(new_exchange_rate, market_pool.expiry - utils::now_milliseconds());
+
+        // 5. 发出交易事件
+        event::emit( SwapEvent {
+            market_state_address: object::object_address(&market_pool_object),
+            expiry: market_pool.expiry,
+            pt_amount: pt_delta,
+            sy_amount: sy_in_including_fee,
+            fee: trade_fee,
+            reserve_fee,
+            exchange_rate: new_exchange_rate
+        });
+
+        // 6. 将用户多付的SY（找零）返回
+        user_sy_balance
+    }
+
     public fun swap_exact_pt_for_sy(
         pt_amount_in: u64,
         min_sy_out: u64,
@@ -410,11 +601,11 @@ module stellaris::market {
         assert!(utils::now_milliseconds() < market_pool.expiry, error::aborted(20));
         let sy_metatda = fungible_asset::store_metadata(py::sy_metadata_address(py_state_object));
         // 3. 从预言机获取当前汇率
-        let current_price = fixed_point64::encode(
-            (oracle::get_asset_price(object::object_address(&sy_metatda)) as u64)
+        let current_price = fixed_point64::from_u128(
+            (oracle::get_asset_price(object::object_address(&sy_metatda)) as u128)
         );
         // 3. 生成市场状态缓存，为核心计算做准备
-        let market_cache = get_market_pool_cache(
+        let market_cache = get_market_pool_cache_internal(
             current_price,
             market_pool,
             py_state_object
@@ -436,6 +627,7 @@ module stellaris::market {
         received_sy_coin
     }
 
+    /// TODO: py_state_object 和 current_index_from_oracle 这个参数在方法内部没有被使用到
     public(package) fun swap_exact_pt_for_sy_internal(
         pt_amount_in: u64,
         user_py_position: Object<PyPosition>,
@@ -449,7 +641,7 @@ module stellaris::market {
         // 卖出 PT，对于池子来说是 PT 增加，所以 pt_delta 是正数。
         // 但在交易模型中，通常把 "用户卖出" 表示为负数 delta
         let pt_delta = fixed_point64_with_sign::neg(fixed_point64_with_sign::from_uint64(pt_amount_in));
-        let (sy_out_gross, reserve_fee, trade_fee, new_rate_scalar, new_rate_anchor) = execute_trade_core(
+        let (sy_out_gross, reserve_fee, trade_fee, new_rate_scalar, new_rate_anchor) = execute_trade_core_internal(
             pt_delta,
             market_cache,
             market_pool,
@@ -470,7 +662,7 @@ module stellaris::market {
         // 4. 处理费用和支付
         // 将金库费用（reserve_fee）转入 vault
         let reserve_fee_amount = fixed_point64_with_sign::truncate(reserve_fee);
-        // balance::join<T0>(&mut market_state.vault, coin::into_balance<T0>(coin::take<T0>(&mut market_state.total_sy, reserve_fee_amount, ctx)));
+        // balance::join(&mut market_state.vault, coin::into_balance(coin::take(&mut market_state.total_sy, reserve_fee_amount, ctx)));
         fungible_asset::deposit(market_pool.vault, fungible_asset::withdraw(&get_signer(), market_pool.total_sy, reserve_fee_amount));
 
         // 5. 计算并更新交易后的市场汇率和隐含利率
@@ -500,10 +692,75 @@ module stellaris::market {
         fungible_asset::withdraw(&get_signer(), market_pool.total_sy, sy_to_user_amount)
     }
 
-    public(package) fun execute_trade_core(
+    /// TODO: py_state_object 和 current_index_from_oracle 这个参数在方法内部没有被使用到
+    public(package) fun swap_exact_pt_for_sy_out_internal(
+        pt_amount_in: u64,
+        user_py_position: Object<PyPosition>,
+        py_state_object: Object<PyState>,
+        current_index_from_oracle: FixedPoint64,
+        market_cache: &MarketPoolCache,
+        market_pool_object: Object<MarketPool>
+    ) :FungibleAsset acquires MarketPool {
+        // 1. 调用交易核心函数进行计算
+        // 卖出 PT，对于池子来说是 PT 增加，所以 pt_delta 是正数。
+        // 但在交易模型中，通常把 "用户卖出" 表示为负数 delta
+        let market_pool = borrow_global_mut<MarketPool>(object::object_address(&market_pool_object));
+        let pt_delta = fixed_point64_with_sign::neg(fixed_point64_with_sign::from_uint64(pt_amount_in));
+        let (sy_out_gross, reserve_fee, trade_fee, new_rate_scalar, new_rate_anchor) = execute_trade_core_internal(
+            pt_delta,
+            market_cache,
+            market_pool,
+            object::object_address(&market_pool_object)
+        );
+
+        // 2. 检查池子是否有足够的 SY 来完成此交易
+        assert!(
+            fixed_point64_with_sign::less_or_equal(sy_out_gross, reserve_fee) ||
+                fixed_point64_with_sign::truncate(fixed_point64_with_sign::sub(sy_out_gross, reserve_fee)) <= fungible_asset::balance(market_pool.total_sy),
+            error::aborted(9)
+        );
+
+        // 3. 更新市场和用户状态
+        market_pool.total_pt += pt_amount_in; // 市场 PT 增加
+        py::split_pt(pt_amount_in, user_py_position); // 从用户头寸中扣除 PT
+
+        // 4. 处理费用和支付
+        // 将金库费用（reserve_fee）转入 vault
+        let reserve_fee_amount = fixed_point64_with_sign::truncate(reserve_fee);
+        // balance::join(&mut market_state.vault, coin::into_balance(coin::take(&mut market_state.total_sy, reserve_fee_amount, ctx)));
+        fungible_asset::deposit(market_pool.vault, fungible_asset::withdraw(&get_signer(), market_pool.total_sy, reserve_fee_amount));
+
+        // 5. 计算并更新交易后的市场汇率和隐含利率
+        let total_sy_asset_after_trade = sy::sy_to_asset(market_cache.index, fixed_point64::encode(fungible_asset::balance(market_pool.total_sy)));
+        let new_exchange_rate = market_math::get_exchange_rate(
+            fixed_point64_with_sign::from_uint64(fixed_point64::decode_round_down(total_sy_asset_after_trade)),
+            fixed_point64_with_sign::from_uint64(market_pool.total_pt),
+            new_rate_scalar,
+            new_rate_anchor,
+            fixed_point64_with_sign::zero()
+        );
+        market_pool.last_ln_implied_rate = get_ln_implied_rate(new_exchange_rate, market_pool.expiry - utils::now_milliseconds());
+
+        // 6. 发出交易事件
+        event::emit( SwapEvent {
+            market_state_address: object::object_address(&market_pool_object),
+            expiry: market_pool.expiry,
+            pt_amount: pt_delta,
+            sy_amount:  fixed_point64_with_sign::neg(sy_out_gross),
+            fee: trade_fee,
+            reserve_fee,
+            exchange_rate: new_exchange_rate
+        });
+
+        // 7. 将用户应得的 SY 从市场池中取出并返回
+        let sy_to_user_amount = fixed_point64_with_sign::truncate(sy_out_gross);
+        fungible_asset::withdraw(&get_signer(), market_pool.total_sy, sy_to_user_amount)
+    }
+
+    public(package) fun execute_trade_core_internal(
         pt_delta: FixedPoint64WithSign,
         market_cache: &MarketPoolCache,
-        market_pool: &MarketPool,
+        market_pool: &mut MarketPool,
         market_pool_address: address
     ) :(
         FixedPoint64WithSign,
@@ -574,7 +831,85 @@ module stellaris::market {
         (gross_sy_in_tokens, reserve_fee_in_tokens, trade_fee_in_tokens, rate_scalar, rate_anchor)
     }
 
-    public(package) fun check_market_cap(market_pool: &MarketPool) {
+    public(package) fun execute_trade_core(
+        pt_delta: FixedPoint64WithSign,
+        market_cache: &MarketPoolCache,
+        market_pool_object: Object<MarketPool>
+    ) :(
+        FixedPoint64WithSign,
+        FixedPoint64WithSign,
+        FixedPoint64WithSign,
+        FixedPoint64WithSign,
+        FixedPoint64WithSign
+    ) acquires MarketPool {
+        let market_pool = borrow_global_mut<MarketPool>(object::object_address(&market_pool_object));
+        // 1. 确保池中有足够的 PT 供用户购买
+        assert!(fixed_point64_with_sign::less_or_equal(pt_delta, fixed_point64_with_sign::from_uint64(market_pool.total_pt)), error::aborted(7));
+        // 2. 从缓存中解包关键参数
+        let rate_scalar = market_cache.rate_scalar;
+        let rate_anchor = market_cache.rate_anchor;
+        let fee_rate = market_cache.fee_rate;
+        let py_index = market_cache.index;
+        // 3. 计算本次交易的有效汇率（包含价格滑点）
+        let effective_exchange_rate = market_math::get_exchange_rate(
+            fixed_point64_with_sign::from_uint64(fixed_point64::decode_round_down(market_cache.total_asset)),
+            fixed_point64_with_sign::from_uint64(market_pool.total_pt),
+            rate_scalar,
+            rate_anchor,
+            pt_delta
+        );
+        // 4. 计算无费用的理想 SY 交换量
+        // ideal_sy = -pt_delta / effective_exchange_rate
+        // 符号被反转，因为 pt_delta 和 sy_delta 的方向相反
+        let ideal_sy_amount = fixed_point64_with_sign::neg(math_fixed64_with_sign::div(pt_delta, effective_exchange_rate));
+        // 5. 根据交易方向，计算扣除费用后的净 SY 交换量
+        let net_sy_amount = if (fixed_point64_with_sign::is_positive(pt_delta)) {
+            // ---- 用户买入 PT / 支付 SY ----
+            // 费用从用户支付的 SY 中收取。
+            // net_sy = ideal_sy * (1 - fee_rate)
+            assert!(fixed_point64_with_sign::greater_or_equal(math_fixed64_with_sign::div(effective_exchange_rate, fee_rate), fixed_point64_with_sign::one()), error::invalid_argument(8));
+            math_fixed64_with_sign::mul(ideal_sy_amount, fixed_point64_with_sign::sub(fixed_point64_with_sign::one(), fee_rate))
+        } else {
+            // ---- 用户卖出 PT / 收到 SY ----
+            // 费用从用户收到的 SY 中扣除
+            math_fixed64_with_sign::div(ideal_sy_amount, fixed_point64_with_sign::add(fixed_point64_with_sign::one(), fee_rate))
+        };
+        // 6. 计算总费用
+        // total_fee = ideal_sy - net_sy
+        let total_fee = fixed_point64_with_sign::sub(ideal_sy_amount, net_sy_amount);
+        // 7. 将费用从“价值”单位转换回“代币”单位
+        // 由于 SY 价值随时间变化 (py_index)，费用需要除以指数来得到实际的代币数量
+        let gross_sy_in_tokens = if (fixed_point64_with_sign::less(total_fee, fixed_point64_with_sign::zero())) {
+            // 处理可能的负费用（精度问题），确保结果正确
+            fixed_point64_with_sign::neg(
+                math_fixed64_with_sign::div(
+                    fixed_point64_with_sign::sub(fixed_point64_with_sign::add
+                        (fixed_point64_with_sign::abs(total_fee),
+                            fixed_point64_with_sign::create_from_raw_value(fixed_point64::to_u128(py_index), true)),
+                        fixed_point64_with_sign::one()),
+                    fixed_point64_with_sign::create_from_raw_value(fixed_point64::to_u128(py_index), true)
+                )
+            )
+        } else {
+            math_fixed64_with_sign::div(total_fee, fixed_point64_with_sign::create_from_raw_value(fixed_point64::to_u128(py_index), true))
+        };
+        // 8. 拆分费用：一部分给金库 (reserve_fee)，剩余部分给流动性提供者 (trade_fee)
+        let reserve_fee_percent = market_global::get_reserve_fee_percent(object::object_address(&market_pool_object));
+        let reserve_fee_in_tokens = math_fixed64_with_sign::div(
+            math_fixed64_with_sign::mul(net_sy_amount,
+                fixed_point64_with_sign::create_from_raw_value(fixed_point64::to_u128(reserve_fee_percent), true)),
+            fixed_point64_with_sign::create_from_raw_value(fixed_point64::to_u128(py_index), true)
+        );
+        let trade_fee_in_tokens = math_fixed64_with_sign::div(net_sy_amount, fixed_point64_with_sign::create_from_raw_value(fixed_point64::to_u128(py_index), true));
+        // 9. 返回所有计算结果
+        (gross_sy_in_tokens, reserve_fee_in_tokens, trade_fee_in_tokens, rate_scalar, rate_anchor)
+    }
+
+    public(package) fun check_market_cap_internal(market_pool: &MarketPool)  {
+        assert!(market_pool.market_cap == 0 || fungible_asset::balance(market_pool.total_sy) <= market_pool.market_cap, error::aborted(15));
+    }
+    public(package) fun check_market_cap(market_pool_object: Object<MarketPool>) acquires MarketPool {
+        let market_pool = borrow_global<MarketPool>(object::object_address(&market_pool_object));
         assert!(market_pool.market_cap == 0 || fungible_asset::balance(market_pool.total_sy) <= market_pool.market_cap, error::aborted(15));
     }
 
@@ -608,7 +943,7 @@ module stellaris::market {
 
     fun get_exchange_rate(
         py_state: Object<PyState>,
-        market_pool: &MarketPool,
+        market_pool: &mut MarketPool,
         current_index_from_oracle: FixedPoint64,
         force_recompute: bool
     ) :FixedPoint64WithSign {
@@ -657,7 +992,7 @@ module stellaris::market {
     fun get_market_state(
         current_index_from_oracle: FixedPoint64,
         py_state: Object<PyState>,
-        market_pool: &MarketPool
+        market_pool: &MarketPool,
     ) :(FixedPoint64, FixedPoint64WithSign, FixedPoint64WithSign, FixedPoint64WithSign, u64, FixedPoint64) {
         //1. 获取最新的 PY index
         let current_py_index = py::current_py_index(py_state, current_index_from_oracle);
@@ -716,5 +1051,69 @@ module stellaris::market {
         seeds_vector.append(bcs::to_bytes<u128>(&fixed_point64_with_sign::get_raw_value(initial_anchor)));
         seeds_vector.append(bcs::to_bytes<u128>(&fixed_point64_with_sign::get_raw_value(fixed_point64_with_sign::create_from_raw_value(fixed_point64::to_u128(ln_fee_rate_root), true))));
         seeds_vector
+    }
+
+    public fun get_market_total_pt(market_pool_object: Object<MarketPool>) : u64 acquires MarketPool {
+        let market_pool = borrow_global_mut<MarketPool>(object::object_address(&market_pool_object));
+        market_pool.total_pt
+    }
+
+    public fun get_market_total_sy(market_pool_object: Object<MarketPool>) : u64 acquires MarketPool {
+        let market_pool = borrow_global_mut<MarketPool>(object::object_address(&market_pool_object));
+        fungible_asset::balance(market_pool.total_sy)
+    }
+
+    public(package) fun join_sy(market_pool_object: Object<MarketPool>, sy_balance: FungibleAsset) acquires MarketPool {
+        let market_pool = borrow_global_mut<MarketPool>(object::object_address(&market_pool_object));
+        fungible_asset::deposit(market_pool.total_sy, sy_balance);
+    }
+
+    public fun market_expiry(market_pool_object: Object<MarketPool>) : u64 acquires MarketPool {
+        let market_pool = borrow_global_mut<MarketPool>(object::object_address(&market_pool_object));
+        market_pool.expiry
+    }
+
+    public(package) fun set_market_last_ln_implied_rate(market_pool: &mut MarketPool, arg1: FixedPoint64) {
+        market_pool.last_ln_implied_rate = arg1;
+    }
+
+    public(package) fun set_market_ln_fee_rate_root(market_pool: &mut MarketPool, arg1: FixedPoint64) {
+        market_pool.ln_fee_rate_root = arg1;
+    }
+
+    public(package) fun set_market_scalar_root(market_pool: &mut MarketPool, arg1: FixedPoint64WithSign) {
+        market_pool.scalar_root = arg1;
+    }
+
+    public(package) fun set_market_total_pt(market_pool: &mut MarketPool, arg1: u64) {
+        market_pool.total_pt = arg1;
+    }
+
+    public fun get_cached_exchange_rate(market_cache: &MarketPoolCache) : FixedPoint64 {
+        market_cache.exchange_rate
+    }
+
+    public fun get_cached_fee_rate(market_cache: &MarketPoolCache) : FixedPoint64WithSign {
+        market_cache.fee_rate
+    }
+
+    public fun get_cached_index(market_cache: &MarketPoolCache) : FixedPoint64 {
+        market_cache.index
+    }
+
+    public fun get_cached_rate_anchor(market_cache: &MarketPoolCache) : FixedPoint64WithSign {
+        market_cache.rate_anchor
+    }
+
+    public fun get_cached_rate_scalar(market_cache: &MarketPoolCache) : FixedPoint64WithSign {
+        market_cache.rate_scalar
+    }
+
+    public fun get_cached_time_to_expire(market_cache: &MarketPoolCache) : u64 {
+        market_cache.time_to_expire
+    }
+
+    public fun get_cached_total_asset(market_cache: &MarketPoolCache) : FixedPoint64 {
+        market_cache.total_asset
     }
 }

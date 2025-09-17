@@ -6,12 +6,12 @@ module stellaris::token_registry {
     use std::option;
     use std::signer;
     use std::string::String;
-    use aptos_std::smart_table::SmartTable;
+    use aptos_std::smart_table::{Self, SmartTable};
     use aptos_framework::event;
-    use aptos_framework::fungible_asset::{Self, MintRef, BurnRef, Metadata, FungibleAsset};
-    use aptos_framework::object::{Self, Object};
+    use aptos_framework::fungible_asset::{Self, MintRef, BurnRef, FungibleAsset};
+    use aptos_framework::object;
     use aptos_framework::primary_fungible_store;
-    use stellaris::package_manager::{get_resource_address, get_signer};
+    use stellaris::package_manager::{is_owner, get_resource_address, get_signer};
 
     use stellaris::utils;
     use stellaris::acl::{has_role, admin_role};
@@ -49,7 +49,16 @@ module stellaris::token_registry {
         burn_ref: BurnRef
     }
 
-    // TODO: 这个模块的 init 方法还没有实现
+    fun init_moudle(publisher: &signer) {
+        assert!(is_owner(signer::address_of(publisher)), error::not_implemented(10001));
+        let registry = Registry {
+            tokens: smart_table::new<String, String>(),
+            token_datas: smart_table::new<String, TokenData>()
+        };
+        move_to(&get_signer(), registry);
+    }
+
+
 
     public fun register_token_with_expiry(
         admin: &signer,
@@ -64,7 +73,7 @@ module stellaris::token_registry {
         // 进行权限检查，只有管理员才能注册新的 token
         assert!(has_role(signer::address_of(admin), admin_role()), error::permission_denied(1));
         let registry = borrow_global_mut<Registry>(get_resource_address());
-        // 创建新的对应的 FA 类型的Token 并且生成 mint_ref 和 burn_ref TODO: 可能在后续的 package_manager 模块中直接使用资源账户的 signer
+        // 创建新的对应的 FA 类型的Token 并且生成 mint_ref 和 burn_ref
         let constructor_ref = &object::create_named_object(&get_signer(), *symbol.bytes());
         primary_fungible_store::create_primary_store_enabled_fungible_asset(
             constructor_ref,
@@ -131,8 +140,8 @@ module stellaris::token_registry {
 
     public(package) fun burn_with_expiry(
         amount: u64,
+        user_pt_balance: FungibleAsset,
         expiry: u64,
-        coin_metadata_address: Object<Metadata>,
         base_asset_name: String,
         burn_token_name: String,
     ) acquires Registry {
@@ -146,8 +155,9 @@ module stellaris::token_registry {
             expiry,
             amount
         });
-        // 从全局结构 Registry 中借出对应的 Token 的 Mint_Ref 权限并销毁从 user 账户中取出的 amount 数量的 token
-        // TODO: 我认为这部分的逻辑可能需要后续再完成
+        // 从全局结构 Registry 中借出对应的 Token 的 Burn_Ref 权限并销毁从 user 账户中取出的 amount 数量的 token
+        let token_data = registry.token_datas.borrow_mut(burn_token_name);
+        fungible_asset::burn(&token_data.burn_ref, user_pt_balance)
     }
 
     public fun is_token_bind_with_expiry(

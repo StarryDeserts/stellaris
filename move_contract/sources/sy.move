@@ -14,7 +14,7 @@ module stellaris::sy {
     use aptos_framework::resource_account;
     use fixed_point64::fixed_point64;
     use fixed_point64::fixed_point64::FixedPoint64;
-    use stellaris::package_manager::{get_signer, get_resource_address};
+    use stellaris::package_manager::{is_owner, get_signer, get_resource_address};
 
 
     use stellaris::acl::{has_role, admin_role};
@@ -33,12 +33,24 @@ module stellaris::sy {
     }
 
     struct State has key {
-        signer_cap: SignerCapability,
         type_table: SmartTable<String, String>, // key -> SY 资产类型的名称(如SY-stAPT) | value -> 其对应资产类型的名称(stAPT)
         underlying_type_table: SmartTable<String, String>, // key -> SY 资产类型的名称(如SY-stAPT) | value -> 该 SY 资产最终代表的、最基础的资产的类型 (例如 APT)
         assests_balance: SmartTable<String, Object<FungibleStore>>, // key -> SY 资产类型的名称(如SY-stAPT) | value -> 对应的实际余额数量
         sy_mint_ref: SmartTable<String, MintRef>, // key -> SY 资产类型的名称(如SY-stAPT) | value -> 该 SY 资产的铸币权
         sy_brun_ref: SmartTable<String, BurnRef>, // key -> SY 资产类型的名称(如SY-stAPT) | value -> 该 SY 资产的销毁权
+    }
+
+    fun init_module(publisher: &signer) {
+        assert!(is_owner(signer::address_of(publisher)), error::not_implemented(10001));
+        let state = State {
+            type_table: smart_table::new<String, String>(),
+            underlying_type_table: smart_table::new<String, String>(),
+            assests_balance: smart_table::new<String, Object<FungibleStore>>(),
+            sy_mint_ref: smart_table::new<String, MintRef>(),
+            sy_brun_ref: smart_table::new<String, BurnRef>(),
+        };
+        // 向资源账户中写入全局对象
+        move_to(&get_signer(), state);
     }
 
     /// SY 资产的铸造
@@ -51,19 +63,6 @@ module stellaris::sy {
         fungible_asset::mint(mint_ref, amount)
     }
 
-    fun init_module(resource_account: &signer) {
-        let signer_cap = resource_account::retrieve_resource_account_cap(resource_account, get_resource_address());
-        let state = State {
-            signer_cap,
-            type_table: smart_table::new<String, String>(),
-            underlying_type_table: smart_table::new<String, String>(),
-            assests_balance: smart_table::new<String, Object<FungibleStore>>(),
-            sy_mint_ref: smart_table::new<String, MintRef>(),
-            sy_brun_ref: smart_table::new<String, BurnRef>(),
-        };
-        // 向资源账户中写入全局对象
-        move_to(resource_account, state);
-    }
 
     /// 存款函数
     public(package) fun deposit(
@@ -81,7 +80,7 @@ module stellaris::sy {
         // 向用户的地址里提取出对应数量的资产，并存入到协议的金库中
         let user_fa_balance = primary_fungible_store::withdraw(user, origin_fa, amount);
         let origin_assest_store = state.assests_balance.borrow_mut(sy_type_name);
-        fungible_asset::deposit(*origin_assest_store, user_fa_balance); // TODO: 感觉需要写一个 example 合约测试一下这个逻辑是否真的成立
+        fungible_asset::deposit(*origin_assest_store, user_fa_balance);
         // 需要发布存款事件
         let deposit_event = DepositEvent {
             amount_in: amount,
@@ -102,7 +101,6 @@ module stellaris::sy {
         sy_fa: Object<Metadata>,
     ) acquires State {
         let state = borrow_global_mut<State>(get_resource_address());
-        let resource_signer = account::create_signer_with_capability(&state.signer_cap);
         // 检查绑定关系是否有效，确保交互的安全性
         assert!(is_sy_bind(state, sy_type_name, original_type_name), error::not_found(4));
         // 检查用户想要赎回数量的 amount 的值，确认其大于 0
@@ -117,7 +115,7 @@ module stellaris::sy {
         event::emit(redeem_event);
         fungible_asset::burn(state.sy_brun_ref.borrow(sy_type_name), sy_balance);
         let origin_balance_store = state.assests_balance.borrow_mut(sy_type_name);
-        let origin_balance = fungible_asset::withdraw(&resource_signer,*origin_balance_store, amount);
+        let origin_balance = fungible_asset::withdraw(&get_signer(),*origin_balance_store, amount);
         // 将赎回的原始资产归还给用户
         primary_fungible_store::deposit(signer::address_of(user), origin_balance);
     }
