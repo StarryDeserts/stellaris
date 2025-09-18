@@ -14,7 +14,7 @@ module stellaris::yield_factory {
 
     use stellaris::fixed_point64::{Self, FixedPoint64};
     use stellaris::py_position;
-    use stellaris::package_manager::{is_owner, get_resource_address, get_signer};
+    use stellaris::package_manager::{get_resource_address, get_signer};
     use stellaris::sy;
     use stellaris::py_position::PyPosition;
     use stellaris::py::PyState;
@@ -70,7 +70,7 @@ module stellaris::yield_factory {
     fun init_module(publisher: &signer) {
         // 初始化 YieldFactoryConfig 结构体
         let config = YieldFactoryConfig {
-            // 设置利息费率为 10%
+            // 设置利息费率为 5%
             interest_fee_rate: fixed_point64::fraction_u128(1, 20), // 1/20 = 5%
             // 设置到期日除数为一天的毫秒数，强制到期日按天对齐
             expiry_divisor: 86400000, // 24 * 60 * 60 * 1000
@@ -252,7 +252,7 @@ module stellaris::yield_factory {
         config: &mut YieldFactoryConfig
     ) {
         // 1. 检查 vault 中是否已经有该类型的 SY 代币余额
-        let sy_metatda = fungible_asset::store_metadata(py::sy_metadata_address(py_state_object));
+        let sy_metatda = py::sy_metadata_address(py_state_object);
         let sy_address = object::object_address(&sy_metatda);
         if (!config.vault.contains(sy_address)) {
             // 如果没有，则初始化一个该类型的 FungibleStore
@@ -275,7 +275,7 @@ module stellaris::yield_factory {
     ) acquires YieldFactoryConfig {
         // 1. 检查 vault 中是否已经有该类型的 SY 代币余额
         let config = borrow_global_mut<YieldFactoryConfig>(get_resource_address());
-        let sy_metatda = fungible_asset::store_metadata(py::sy_metadata_address(py_state_object));
+        let sy_metatda = py::sy_metadata_address(py_state_object);
         let sy_address = object::object_address(&sy_metatda);
         if (!config.vault.contains(sy_address)) {
             // 如果没有，则初始化一个该类型的 FungibleStore

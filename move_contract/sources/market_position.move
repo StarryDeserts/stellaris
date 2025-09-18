@@ -8,7 +8,7 @@ module stellaris::market_position {
     use aptos_std::string_utils;
     use aptos_framework::object;
     use aptos_framework::object::{Object, ConstructorRef};
-    use stellaris::package_manager::get_resource_address;
+    use stellaris::package_manager::{get_resource_address, get_signer};
     use stellaris::utils;
 
     const ONE_DAYS_MILLISECOND:u64 = 86400000;
@@ -29,6 +29,19 @@ module stellaris::market_position {
         lp_amount_display: String,
         rewards_debt: SmartTable<address, u256>,
         rewards_harvested: SmartTable<address, u64>
+    }
+
+    #[event]
+    struct CreateMarketPositionEvent has store, drop {
+        position_object_id: address,
+        market_pool_id: address
+    }
+
+    fun init_module(publisher: &signer) {
+        let py_position_registry = MarketPositionRegistry {
+            user_position_address: smart_table::new<address, address>()
+        };
+        move_to(&get_signer(), py_position_registry);
     }
 
     public(package) fun open_position(

@@ -1,6 +1,5 @@
 module stellaris::py_position {
 
-    use std::error;
     use std::signer;
     use std::string::{Self, String};
     use aptos_std::smart_table::{Self, SmartTable};
@@ -8,7 +7,7 @@ module stellaris::py_position {
     use aptos_framework::event;
     use aptos_framework::object::{Self, ConstructorRef, Object};
     use stellaris::fixed_point64::{Self, FixedPoint64};
-    use stellaris::package_manager::{is_owner, get_signer, get_resource_address};
+    use stellaris::package_manager::{get_signer, get_resource_address};
     use stellaris::utils;
 
     const ONE_DAYS_MILLISECOND:u64 = 86400000;
@@ -41,7 +40,7 @@ module stellaris::py_position {
         owner_address: address
     }
 
-    fun init(publisher: &signer) {
+    fun init_module(publisher: &signer) {
         let py_position_registry = PyPositionRegistry {
             user_position_address: smart_table::new<address, address>()
         };
@@ -87,7 +86,6 @@ module stellaris::py_position {
         event::emit<CreatePositionEvent>(create_position_event);
         py_position_registry.user_position_address.add(user_address, object::address_from_constructor_ref(constructor_ref));
         object::object_from_constructor_ref<PyPosition>(constructor_ref)
-
     }
 
     public(package) fun set_accured(

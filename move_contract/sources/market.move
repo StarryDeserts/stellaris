@@ -22,7 +22,7 @@ module stellaris::market {
     use stellaris::py_position::{Self, PyPosition};
     use stellaris::math_fixed64_with_sign;
     use stellaris::fixed_point64_with_sign;
-    use stellaris::package_manager::{Self, get_signer};
+    use stellaris::package_manager::{Self, get_signer, get_resource_address};
     use stellaris::market_position::{Self, MarketPosition};
     use stellaris::fixed_point64_with_sign::FixedPoint64WithSign;
 
@@ -178,7 +178,7 @@ module stellaris::market {
         // 确保用户在 py_position 中的余额足够
         assert!(user_pt_balance >= pt_amount_to_add, error::aborted(12));
         // 确保用户的 SY 余额足够
-        let sy_metatda = fungible_asset::store_metadata(py::sy_metadata_address(py_state));
+        let sy_metatda = py::sy_metadata_address(py_state);
         let if_sy = primary_fungible_store::is_balance_at_least(signer::address_of(user), sy_metatda, sy_amount);
         assert!(if_sy, error::aborted(13));
         // 确保 py_position 与 py_state 是同一个
@@ -192,8 +192,8 @@ module stellaris::market {
         let constructor_ref = &object::create_object(signer::address_of(user));
         let new_market_position = market_position::open_position(
             constructor_ref,
-            object::object_address(&market_pool_object),
             signer::address_of(user),
+            object::object_address(&market_pool_object),
             fungible_asset::name(sy_metatda),
             market_pool.expiry
         );
@@ -203,7 +203,6 @@ module stellaris::market {
         );
         let remaining_sy_coin = mint_lp_internal(
             pt_amount_to_add,
-            sy_amount,
             user_sy_balance,
             current_price,
             user_py_position,
@@ -220,7 +219,6 @@ module stellaris::market {
 
     public(package) fun mint_lp_internal(
         pt_amount_in: u64,
-        sy_token_amount: u64,
         user_sy_balance: FungibleAsset,
         current_index_from_oracle: FixedPoint64,
         user_py_position: Object<PyPosition>,
@@ -229,6 +227,7 @@ module stellaris::market {
         market_pool: &mut MarketPool,
         market_pool_address: address
     ) :FungibleAsset {
+        let sy_token_amount = fungible_asset::amount(&user_sy_balance);
         // 逻辑分支：如果池子为空
         if (market_pool.lp_supply == 0) {
             // --- 分支 A: 初始化流动性池 (首次添加流动性) ---
@@ -437,7 +436,7 @@ module stellaris::market {
         assert!(market_pool.py_state_address == object::object_address(&py_state_object), error::permission_denied(14));assert!(py_position::py_state_id(user_py_position) == market_pool.py_state_address, error::aborted(18));
         assert!(market_pool.py_state_address == object::object_address(&market_pool_object), error::aborted(19));
         assert!(exact_pt_out <= market_pool.total_pt, error::aborted(21));
-        let sy_metatda = fungible_asset::store_metadata(py::sy_metadata_address(py_state_object));
+        let sy_metatda = py::sy_metadata_address(py_state_object);
         let if_sy = primary_fungible_store::is_balance_at_least(signer::address_of(user), sy_metatda, sy_amount);
         assert!(if_sy, error::aborted(13));
         // 取出用户的 sy 资产
@@ -607,7 +606,7 @@ module stellaris::market {
         // 确保传入的market 与 py_state 相符
         assert!(market_pool.py_state_address == object::object_address(&py_state_object), error::permission_denied(14));
         assert!(utils::now_milliseconds() < market_pool.expiry, error::aborted(20));
-        let sy_metatda = fungible_asset::store_metadata(py::sy_metadata_address(py_state_object));
+        let sy_metatda = py::sy_metadata_address(py_state_object);
         // 3. 从预言机获取当前汇率
         let current_price = fixed_point64::from_u128(
             (oracle::get_asset_price(object::object_address(&sy_metatda)) as u128)
@@ -951,7 +950,7 @@ module stellaris::market {
         let market_pool = borrow_global_mut<MarketPool>(object::object_address(&market_pool_object));
         assert!(utils::now_milliseconds() < market_pool.expiry, error::aborted(20));
         // 确保用户的 SY 余额足够
-        let sy_metatda = fungible_asset::store_metadata(py::sy_metadata_address(py_state));
+        let sy_metatda = py::sy_metadata_address(py_state);
         let if_sy = primary_fungible_store::is_balance_at_least(signer::address_of(user), sy_metatda, sy_amount);
         assert!(if_sy, error::aborted(13));
         // 确保 py_position 与 py_state 是同一个
@@ -975,14 +974,13 @@ module stellaris::market {
         let constructor_ref = &object::create_object(signer::address_of(user));
         let new_market_position = market_position::open_position(
             constructor_ref,
-            object::object_address(&market_pool_object),
             signer::address_of(user),
+            object::object_address(&market_pool_object),
             fungible_asset::name(sy_metatda),
             market_pool.expiry
         );
         let remaining_sy_coin = mint_lp_internal(
             pt_minted_amount,
-            sy_amount,
             user_sy_balance,
             current_price,
             user_py_position,
@@ -1105,6 +1103,15 @@ module stellaris::market {
         (object::generate_signer(&pool_constructor_ref), object::address_from_constructor_ref(&pool_constructor_ref))
     }
 
+    public fun calc_market_address(
+        py_state_address: address,
+        scalar_root: FixedPoint64WithSign,
+        initial_anchor: FixedPoint64WithSign,
+        ln_fee_rate_root: FixedPoint64
+    ) :address {
+        object::create_object_address(&get_resource_address(), get_pool_seeds(py_state_address, scalar_root, initial_anchor, ln_fee_rate_root))
+    }
+
     public fun get_pool_seeds(
         py_state_address: address,
         scalar_root: FixedPoint64WithSign,
@@ -1119,11 +1126,13 @@ module stellaris::market {
         seeds_vector
     }
 
+    #[view]
     public fun get_market_total_pt(market_pool_object: Object<MarketPool>) : u64 acquires MarketPool {
         let market_pool = borrow_global_mut<MarketPool>(object::object_address(&market_pool_object));
         market_pool.total_pt
     }
 
+    #[view]
     public fun get_market_total_sy(market_pool_object: Object<MarketPool>) : u64 acquires MarketPool {
         let market_pool = borrow_global_mut<MarketPool>(object::object_address(&market_pool_object));
         fungible_asset::balance(market_pool.total_sy)
@@ -1134,6 +1143,7 @@ module stellaris::market {
         fungible_asset::deposit(market_pool.total_sy, sy_balance);
     }
 
+    #[view]
     public fun market_expiry(market_pool_object: Object<MarketPool>) : u64 acquires MarketPool {
         let market_pool = borrow_global_mut<MarketPool>(object::object_address(&market_pool_object));
         market_pool.expiry

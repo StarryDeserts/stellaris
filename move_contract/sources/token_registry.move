@@ -47,7 +47,7 @@ module stellaris::token_registry {
         burn_ref: BurnRef
     }
 
-    fun init_moudle(publisher: &signer) {
+    fun init_module(publisher: &signer) {
         let registry = Registry {
             tokens: smart_table::new<String, String>(),
             token_datas: smart_table::new<String, TokenData>()

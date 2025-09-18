@@ -61,7 +61,7 @@ module stellaris::py {
         amount: u64,
     }
 
-    fun init_moudle(publisher: &signer) {
+    fun init_module(publisher: &signer) {
         let store = PyStore {
             all_py_states: smart_vector::empty<address>()
         };
@@ -110,8 +110,8 @@ module stellaris::py {
         // 调用 py_position 模块的 open_position 函数
         py_position::open_position(
             &object::create_object(signer::address_of(user)),
-            object::object_address(&py_state_object),
             signer::address_of(user),
+            object::object_address(&py_state_object),
             sy_type_name,
             py_state.expiry
         );

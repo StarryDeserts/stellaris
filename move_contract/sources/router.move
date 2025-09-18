@@ -40,7 +40,7 @@ module stellaris::router {
         // 2. 确保市场已经初始化（即池中已有PT），因为单边加流的逻辑依赖于现有流动性
         assert!(market::get_market_total_pt(market_pool_object) > 0, error::aborted(2));
 
-        let sy_metatda = fungible_asset::store_metadata(py::sy_metadata_address(py_state_object));
+        let sy_metatda = py::sy_metadata_address(py_state_object);
         let if_sy = primary_fungible_store::is_balance_at_least(signer::address_of(user), sy_metatda, sy_amount);
         assert!(if_sy, error::aborted(13));
         // 取出用户的 sy 资产
@@ -54,8 +54,8 @@ module stellaris::router {
         let constructor_ref = &object::create_object(signer::address_of(user));
         let new_market_position = market_position::open_position(
             constructor_ref,
-            object::object_address(&market_pool_object),
             signer::address_of(user),
+            object::object_address(&market_pool_object),
             fungible_asset::name(sy_metatda),
             market::market_expiry(market_pool_object)
         );
@@ -166,7 +166,7 @@ module stellaris::router {
         market_pool_object: Object<MarketPool>
     )  {
         // 2. 获取预言机价格并创建市场状态缓存
-        let sy_metatda = fungible_asset::store_metadata(py::sy_metadata_address(py_state_object));
+        let sy_metatda = py::sy_metadata_address(py_state_object);
         let current_price = fixed_point64::from_u128(
             (oracle::get_asset_price(object::object_address(&sy_metatda)) as u128)
         );
@@ -214,7 +214,7 @@ module stellaris::router {
         market_pool_object: Object<MarketPool>
     )  {
         // 2. 创建市场状态缓存
-        let sy_metatda = fungible_asset::store_metadata(py::sy_metadata_address(py_state_object));
+        let sy_metatda = py::sy_metadata_address(py_state_object);
         let market_state_cache = market::get_market_pool_cache(
             fixed_point64::from_u128(
                 (oracle::get_asset_price(object::object_address(&sy_metatda)) as u128)
@@ -297,7 +297,7 @@ module stellaris::router {
         assert!(user_yt_balance >= exact_yt_in, error::aborted(8));
 
         // 3. 创建市场状态缓存
-        let sy_metatda = fungible_asset::store_metadata(py::sy_metadata_address(py_state_object));
+        let sy_metatda = py::sy_metadata_address(py_state_object);
         let market_state_cache = market::get_market_pool_cache(
             fixed_point64::from_u128(
                 (oracle::get_asset_price(object::object_address(&sy_metatda)) as u128)

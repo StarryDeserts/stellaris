@@ -14,11 +14,11 @@ module stellaris::acl {
          let acl_m = ACLManager {
              permissions: smart_table::new<u8, ACL>()
          };
-        acl_m.permissions.add( register_sy_role(), acl::empty());
-        acl_m.permissions.add( add_reward_pool_role(), acl::empty());
-        acl_m.permissions.add( create_market_role(), acl::empty());
-        acl_m.permissions.add( update_config_role(), acl::empty());
-        acl_m.permissions.add( admin_role(), acl::empty());
+         acl_m.permissions.add( register_sy_role(), acl::empty());
+         acl_m.permissions.add( add_reward_pool_role(), acl::empty());
+         acl_m.permissions.add( create_market_role(), acl::empty());
+         acl_m.permissions.add( update_config_role(), acl::empty());
+         acl_m.permissions.add( admin_role(), acl::empty());
          move_to(
              publisher, acl_m
          )
