@@ -1,10 +1,10 @@
 /// Implementation of Signed Math utilities for FixedPoint64WithSign in Move language.
 /// Extended from log_exp_math for signed operations.
 module stellaris::math_fixed64_with_sign {
-    use fixed_point64::fixed_point64;  // Base unsigned fixed point
+    use stellaris::fixed_point64;  // Base unsigned fixed point
     use stellaris::fixed_point64_with_sign;  // Signed fixed point
     use stellaris::fixed_point64_with_sign::FixedPoint64WithSign;  // Signed fixed point Struct
-    use fixed_point64::log_exp_math;  // Base math functions
+    use stellaris::log_exp_math;  // Base math functions
 
     // Error codes (extend from base if needed)
     const ERR_DIVIDE_BY_ZERO: u64 = 0;  // From base

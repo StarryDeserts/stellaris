@@ -4,7 +4,7 @@ module stellaris::market_factory {
     use aptos_framework::event;
     use aptos_framework::object;
     use aptos_framework::object::Object;
-    use fixed_point64::fixed_point64::{Self, FixedPoint64};
+    use stellaris::fixed_point64::{Self, FixedPoint64};
     use stellaris::market::{create_pool, calc_market_pool_signer_and_address};
     use stellaris::math_fixed64_with_sign;
     use stellaris::fixed_point64_with_sign;
@@ -25,7 +25,7 @@ module stellaris::market_factory {
         market_cap: u64,
     }
 
-    public fun create_new_market_with_raw_values(
+    public entry fun create_new_market_with_raw_values(
         py_state_object: Object<PyState>,
         scalar_root_raw: u128,
         scalar_root_is_positive: bool,

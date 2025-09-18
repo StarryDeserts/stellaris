@@ -4,17 +4,15 @@ module stellaris::token_registry {
     use std::error;
     use std::hash;
     use std::option;
-    use std::signer;
     use std::string::String;
     use aptos_std::smart_table::{Self, SmartTable};
     use aptos_framework::event;
     use aptos_framework::fungible_asset::{Self, MintRef, BurnRef, FungibleAsset};
     use aptos_framework::object;
     use aptos_framework::primary_fungible_store;
-    use stellaris::package_manager::{is_owner, get_resource_address, get_signer};
+    use stellaris::package_manager::{get_resource_address, get_signer};
 
     use stellaris::utils;
-    use stellaris::acl::{has_role, admin_role};
 
     #[event]
     struct TokenRegistrationWithExpiryEvent has store, drop {
@@ -50,7 +48,6 @@ module stellaris::token_registry {
     }
 
     fun init_moudle(publisher: &signer) {
-        assert!(is_owner(signer::address_of(publisher)), error::not_implemented(10001));
         let registry = Registry {
             tokens: smart_table::new<String, String>(),
             token_datas: smart_table::new<String, TokenData>()
@@ -60,7 +57,7 @@ module stellaris::token_registry {
 
 
 
-    public fun register_token_with_expiry(
+    public entry fun register_token_with_expiry(
         admin: &signer,
         symbol: String,
         decimals: u8,
@@ -71,7 +68,7 @@ module stellaris::token_registry {
         expiry: u64
     ) acquires Registry {
         // 进行权限检查，只有管理员才能注册新的 token
-        assert!(has_role(signer::address_of(admin), admin_role()), error::permission_denied(1));
+        // assert!(has_role(signer::address_of(admin), admin_role()), error::permission_denied(1));
         let registry = borrow_global_mut<Registry>(get_resource_address());
         // 创建新的对应的 FA 类型的Token 并且生成 mint_ref 和 burn_ref
         let constructor_ref = &object::create_named_object(&get_signer(), *symbol.bytes());

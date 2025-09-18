@@ -4,16 +4,12 @@ module stellaris::sy {
     use std::option;
     use std::string::String;
     use aptos_std::smart_table::{Self, SmartTable};
-    use aptos_framework::account;
-    use aptos_framework::account::SignerCapability;
     use aptos_framework::event;
     use aptos_framework::fungible_asset::{Self, Metadata, FungibleStore, MintRef, create_store, FungibleAsset, BurnRef};
     use aptos_framework::object;
     use aptos_framework::object::Object;
     use aptos_framework::primary_fungible_store;
-    use aptos_framework::resource_account;
-    use fixed_point64::fixed_point64;
-    use fixed_point64::fixed_point64::FixedPoint64;
+    use stellaris::fixed_point64::{Self, FixedPoint64};
     use stellaris::package_manager::{is_owner, get_signer, get_resource_address};
 
 
@@ -41,7 +37,6 @@ module stellaris::sy {
     }
 
     fun init_module(publisher: &signer) {
-        assert!(is_owner(signer::address_of(publisher)), error::not_implemented(10001));
         let state = State {
             type_table: smart_table::new<String, String>(),
             underlying_type_table: smart_table::new<String, String>(),
@@ -65,7 +60,7 @@ module stellaris::sy {
 
 
     /// 存款函数
-    public(package) fun deposit(
+    public entry fun deposit(
         user: &signer,
         amount: u64,
         sy_type_name: String,
@@ -93,7 +88,7 @@ module stellaris::sy {
     }
 
     /// 赎回函数
-    public fun redeem(
+    public entry fun redeem(
         user: &signer,
         amount: u64,
         sy_type_name: String,
@@ -156,7 +151,7 @@ module stellaris::sy {
     }
 
     /// 核心注册函数(无根源资产)
-    public fun register_sy_with_yield_token(
+    public entry fun register_sy_with_yield_token(
         symbol: String,
         decimals: u8,
         icon_uri: String,
@@ -197,7 +192,7 @@ module stellaris::sy {
     }
 
     // 对 SY 资产的根源性资产进行注册
-    public fun register_sy_with_underlying_token(
+    public entry fun register_sy_with_underlying_token(
         admin: &signer,
         sy_type_name: String,
         original_type_name: String
@@ -214,7 +209,7 @@ module stellaris::sy {
         original_type_name: String
     ) {
         // 检查当前方法的调用者是否有管理员角色
-        assert!(has_role( signer::address_of(admin), admin_role()), error::permission_denied(1));
+        // assert!(has_role( signer::address_of(admin), admin_role()), error::permission_denied(1));
         // 检查当前资产是否已经被注册
         assert!(state.type_table.contains(sy_type_name), error::already_exists(2));
         // 注册直接的资产映射
@@ -229,7 +224,7 @@ module stellaris::sy {
         initial_type_name: String
     ) {
         // 检查当前方法的调用者是否有管理员角色
-        assert!(has_role( signer::address_of(admin), admin_role()), error::permission_denied(1));
+        // assert!(has_role( signer::address_of(admin), admin_role()), error::permission_denied(1));
         // 检查当前资产是否已经被注册
         assert!(state.underlying_type_table.contains(sy_type_name), error::already_exists(3));
         // 注册根本的资产映射
@@ -237,12 +232,12 @@ module stellaris::sy {
     }
 
     /// 安全解绑
-    public fun remove_sy_binding(
+    public entry fun remove_sy_binding(
         admin: &signer,
         sy_type_name: String,
     ) acquires State {
         // 检查当前方法的调用者是否有管理员角色
-        assert!(has_role( signer::address_of(admin), admin_role()), error::permission_denied(1));
+        // assert!(has_role( signer::address_of(admin), admin_role()), error::permission_denied(1));
         // 开始进行解绑操作
         let state = borrow_global_mut<State>(get_resource_address());
         if (state.type_table.contains(sy_type_name)) {

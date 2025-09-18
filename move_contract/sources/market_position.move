@@ -8,10 +8,15 @@ module stellaris::market_position {
     use aptos_std::string_utils;
     use aptos_framework::object;
     use aptos_framework::object::{Object, ConstructorRef};
+    use stellaris::package_manager::get_resource_address;
     use stellaris::utils;
 
     const ONE_DAYS_MILLISECOND:u64 = 86400000;
     const SCALING_FACTOR:u64 = 100000000;
+
+    struct MarketPositionRegistry has key {
+        user_position_address: SmartTable<address, address>
+    }
 
     struct MarketPosition has key {
         market_state_id: address,
@@ -28,10 +33,12 @@ module stellaris::market_position {
 
     public(package) fun open_position(
         constructor_ref: &ConstructorRef,
+        user_address: address,
         market_pool_address: address,
         yield_token_name: String,
         expiry: u64,
-    ) :Object<MarketPosition> {
+    ) :Object<MarketPosition> acquires MarketPositionRegistry {
+        let market_position_registry = borrow_global_mut<MarketPositionRegistry>(get_resource_address());
         let signer = object::generate_signer(constructor_ref);
 
         let position_name = string::utf8(b"Stellaris LP | ");
@@ -53,6 +60,7 @@ module stellaris::market_position {
             rewards_harvested: smart_table::new(),
         };
         move_to(&signer, maket_position);
+        market_position_registry.user_position_address.add(user_address, object::address_from_constructor_ref(constructor_ref));
         object::object_from_constructor_ref<MarketPosition>(constructor_ref)
     }
 
@@ -83,6 +91,7 @@ module stellaris::market_position {
     //     (position.rewards_debt, position.rewards_harvested)
     // }
 
+
     public(package) fun delete_empty_position(
         market_position_object: Object<MarketPosition>
     ) acquires MarketPosition {
@@ -105,14 +114,27 @@ module stellaris::market_position {
 
     }
 
+    #[view]
+    public fun get_user_py_position_address(user_address: address) :address acquires MarketPositionRegistry {
+        *borrow_global<MarketPositionRegistry>(get_resource_address()).user_position_address.borrow(user_address)
+    }
+
+    #[view]
     public fun lp_amount(market_position_object: Object<MarketPosition>) :u64 acquires MarketPosition {
         let position = borrow_global<MarketPosition>(object::object_address(&market_position_object));
         position.lp_amount
     }
 
+    #[view]
     public fun market_state_id(market_position_object: Object<MarketPosition>) :address acquires MarketPosition {
         let position = borrow_global<MarketPosition>(object::object_address(&market_position_object));
         position.market_state_id
+    }
+
+    #[view]
+    public fun lp_amount_display(market_position_object: Object<MarketPosition>) :String acquires MarketPosition {
+        let position = borrow_global<MarketPosition>(object::object_address(&market_position_object));
+        position.lp_amount_display
     }
 
     fun set_expiry_days(market_position: &mut MarketPosition) {

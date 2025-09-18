@@ -1,9 +1,9 @@
 module stellaris::market_math {
 
     use std::error;
-    use fixed_point64::fixed_point64;
-    use fixed_point64::fixed_point64::FixedPoint64;
+
     use stellaris::math_fixed64_with_sign;
+    use stellaris::fixed_point64::{Self, FixedPoint64};
     use stellaris::fixed_point64_with_sign::{Self, FixedPoint64WithSign};
 
     const ERR_MARKET_PROPORTION_CAN_NOT_BE_ONE:u64 = 1;

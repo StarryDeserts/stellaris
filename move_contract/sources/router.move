@@ -7,7 +7,7 @@ module stellaris::router {
     use aptos_framework::object;
     use aptos_framework::object::Object;
     use aptos_framework::primary_fungible_store;
-    use fixed_point64::fixed_point64::{Self, FixedPoint64};
+    use stellaris::fixed_point64::{Self, FixedPoint64};
     use stellaris::py_position;
     use stellaris::yield_factory;
     use stellaris::market_position;
@@ -28,7 +28,7 @@ module stellaris::router {
         exchange_rate: FixedPoint64,
     }
 
-    public fun add_liquidity_single_sy(
+    public entry fun add_liquidity_single_sy(
         user: &signer,
         sy_amount: u64,
         net_pt_amount: u64,
@@ -55,6 +55,7 @@ module stellaris::router {
         let new_market_position = market_position::open_position(
             constructor_ref,
             object::object_address(&market_pool_object),
+            signer::address_of(user),
             fungible_asset::name(sy_metatda),
             market::market_expiry(market_pool_object)
         );
@@ -155,7 +156,7 @@ module stellaris::router {
         (0, fixed_point64::zero(), fixed_point64_with_sign::zero())
     }
 
-    public fun swap_exact_sy_for_pt<T0: drop>(
+    public entry fun swap_exact_sy_for_pt(
         user: &signer,
         min_pt_out: u64,
         exact_pt_out: u64,
@@ -163,7 +164,7 @@ module stellaris::router {
         user_py_position: Object<PyPosition>,
         py_state_object: Object<PyState>,
         market_pool_object: Object<MarketPool>
-    ) : u64 {
+    )  {
         // 2. 获取预言机价格并创建市场状态缓存
         let sy_metatda = fungible_asset::store_metadata(py::sy_metadata_address(py_state_object));
         let current_price = fixed_point64::from_u128(
@@ -198,11 +199,11 @@ module stellaris::router {
         assert!(exact_pt_out >= min_pt_out, error::aborted(11));
 
         // 7. 返回用户获得的 PT 数量
-        exact_pt_out
+        // exact_pt_out
     }
 
 
-    public fun swap_exact_sy_for_yt(
+    public entry fun swap_exact_sy_for_yt(
         user: &signer,
         min_yt_out: u64,
         yt_amount_out_approx: u64,
@@ -211,7 +212,7 @@ module stellaris::router {
         user_py_position: Object<PyPosition>,
         py_state_object: Object<PyState>,
         market_pool_object: Object<MarketPool>
-    ) : u64 {
+    )  {
         // 2. 创建市场状态缓存
         let sy_metatda = fungible_asset::store_metadata(py::sy_metadata_address(py_state_object));
         let market_state_cache = market::get_market_pool_cache(
@@ -278,17 +279,19 @@ module stellaris::router {
         event::emit<SwapYTEvent>(swap_event);
 
         // 13. 返回实际获得的 YT 数量
-        yt_amount_out_approx
+        // yt_amount_out_approx
     }
 
 
-    public fun swap_exact_yt_for_sy(
+    public entry fun swap_exact_yt_for_sy(
+        user: &signer,
         exact_yt_in: u64,
         min_sy_out: u64,
         user_py_position: Object<PyPosition>,
         py_state_object: Object<PyState>,
         market_pool_object: Object<MarketPool>
-    ) : FungibleAsset {
+    )  {
+        let user_address = signer::address_of(user);
         // 2. 检查用户是否有足够的 YT 余额
         let (_, user_yt_balance) = py_position::py_amount(user_py_position);
         assert!(user_yt_balance >= exact_yt_in, error::aborted(8));
@@ -316,7 +319,7 @@ module stellaris::router {
         assert!(fungible_asset::amount(&sy_coin_out) >= min_sy_out, error::aborted(9));
 
         // 6. 返回 SY 代币
-        sy_coin_out
+        primary_fungible_store::deposit(user_address, sy_coin_out);
     }
 
 

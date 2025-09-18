@@ -12,8 +12,7 @@ module stellaris::yield_factory {
     use aptos_framework::object::Object;
     use aptos_framework::primary_fungible_store;
 
-    use fixed_point64::fixed_point64;
-    use fixed_point64::fixed_point64::FixedPoint64;
+    use stellaris::fixed_point64::{Self, FixedPoint64};
     use stellaris::py_position;
     use stellaris::package_manager::{is_owner, get_resource_address, get_signer};
     use stellaris::sy;
@@ -69,10 +68,6 @@ module stellaris::yield_factory {
     }
 
     fun init_module(publisher: &signer) {
-        // 确保只有模块的发布者（或指定的管理员）才能初始化
-        // 注意: is_owner 和 get_resource_address 需要你根据 package_manager 的实现来确定
-        assert!(is_owner(signer::address_of(publisher)), error::permission_denied(10001));
-
         // 初始化 YieldFactoryConfig 结构体
         let config = YieldFactoryConfig {
             // 设置利息费率为 10%
@@ -91,7 +86,7 @@ module stellaris::yield_factory {
 
 
      /// 负责为一个新的到期日创建一个全新的 PyState 池
-    public fun create(
+    public entry fun create(
         expiry: u64,
         sy_type_name: String,
         sy_metadata_address: Object<Metadata>,
@@ -303,7 +298,7 @@ module stellaris::yield_factory {
     }
 
 
-    public fun update_config(
+    public entry fun update_config(
         admin: &signer,
         new_interest_fee_rate_raw: u128,
         // 新的到期日除数

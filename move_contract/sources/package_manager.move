@@ -27,7 +27,7 @@ module stellaris::package_manager {
 
     public fun get_resource_address() :address {
         let publisher_address = @stellaris;
-        account::create_resource_address(&publisher_address, b"PACKAGE_MANAGER")
+        account::create_resource_address(&publisher_address, b"PACKAGE_MANAGER_Z")
     }
 
     public(package) fun get_signer() :signer acquires PermissionConfig {
@@ -38,7 +38,7 @@ module stellaris::package_manager {
         if (is_initialized()) {
             return
         };
-        let (signer, signer_cap) = account::create_resource_account(publsiher, b"PACKAGE_MANAGER");
+        let (signer, signer_cap) = account::create_resource_account(publsiher, b"PACKAGE_MANAGER_Z");
         let resource_signer = signer;
         let config = PermissionConfig {
             signer_cap,

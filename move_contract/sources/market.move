@@ -8,8 +8,9 @@ module stellaris::market {
     use aptos_framework::event;
     use aptos_framework::primary_fungible_store;
     use aptos_framework::object::{Self, Object};
-    use fixed_point64::fixed_point64::{Self, FixedPoint64};
+    use stellaris::fixed_point64::{Self, FixedPoint64};
     use aptos_framework::fungible_asset::{Self, FungibleStore, FungibleAsset};
+    use stellaris::yield_factory;
     use stellaris::oracle;
 
     use stellaris::sy;
@@ -160,7 +161,7 @@ module stellaris::market {
     }
 
     ///
-    public fun mint_lp(
+    public entry fun mint_lp(
         user: &signer,
         sy_amount: u64,
         pt_amount_to_add: u64,
@@ -168,7 +169,7 @@ module stellaris::market {
         user_py_position: Object<PyPosition>,
         py_state: Object<PyState>,
         market_pool_object: Object<MarketPool>
-    ) :FungibleAsset acquires MarketPool {
+    ) acquires MarketPool {
         let (user_pt_balance, _) = py_position::py_amount(user_py_position);
         let market_pool = borrow_global_mut<MarketPool>(object::object_address(&market_pool_object));
         assert!(utils::now_milliseconds() < py_position::expiry(user_py_position), error::invalid_argument(10));
@@ -192,6 +193,7 @@ module stellaris::market {
         let new_market_position = market_position::open_position(
             constructor_ref,
             object::object_address(&market_pool_object),
+            signer::address_of(user),
             fungible_asset::name(sy_metatda),
             market_pool.expiry
         );
@@ -213,7 +215,7 @@ module stellaris::market {
         check_market_cap_internal(market_pool);
         assert!(market_position::lp_amount(new_market_position) >= min_lp_out, error::aborted(16)); // 检查产出的LP是否满足最小期望
         // 6. 返回多余的SY代币和新创建的LP头寸对象
-        remaining_sy_coin
+        primary_fungible_store::deposit(signer::address_of(user), remaining_sy_coin);
     }
 
     public(package) fun mint_lp_internal(
@@ -420,16 +422,19 @@ module stellaris::market {
         }
     }
 
-    public fun swap_sy_for_exact_pt(
+    public entry fun swap_sy_for_exact_pt(
         user: &signer,
         exact_pt_out: u64,
         sy_amount: u64,
         user_py_position: Object<PyPosition>,
         py_state_object: Object<PyState>,
         market_pool_object: Object<MarketPool>
-    ) :FungibleAsset acquires MarketPool {
+    )  acquires MarketPool {
         let market_pool = borrow_global_mut<MarketPool>(object::object_address(&market_pool_object));
-        assert!(py_position::py_state_id(user_py_position) == market_pool.py_state_address, error::aborted(18));
+        // 确保 py_position 与 py_state 是同一个
+        assert!(py_position::py_state_id(user_py_position) == object::object_address(&py_state_object), error::permission_denied(13));
+        // 确保传入的market 与 py_state 相符
+        assert!(market_pool.py_state_address == object::object_address(&py_state_object), error::permission_denied(14));assert!(py_position::py_state_id(user_py_position) == market_pool.py_state_address, error::aborted(18));
         assert!(market_pool.py_state_address == object::object_address(&market_pool_object), error::aborted(19));
         assert!(exact_pt_out <= market_pool.total_pt, error::aborted(21));
         let sy_metatda = fungible_asset::store_metadata(py::sy_metadata_address(py_state_object));
@@ -459,7 +464,7 @@ module stellaris::market {
             object::object_address(&market_pool_object)
         );
         // 5. 返还剩下的 sy token
-        received_sy_coin
+        primary_fungible_store::deposit(signer::address_of(user), received_sy_coin);
     }
 
     /// TODO: py_state_object 和 current_index_from_oracle 这个参数在方法内部没有被使用到
@@ -586,18 +591,21 @@ module stellaris::market {
         user_sy_balance
     }
 
-    public fun swap_exact_pt_for_sy(
+    public entry fun swap_exact_pt_for_sy(
+        user: &signer,
         pt_amount_in: u64,
         min_sy_out: u64,
         user_py_position: Object<PyPosition>,
         py_state_object: Object<PyState>,
         market_pool_object: Object<MarketPool>
-    ) :FungibleAsset acquires MarketPool {
+    ) acquires MarketPool {
         let market_pool = borrow_global_mut<MarketPool>(object::object_address(&market_pool_object));
         let (user_pt_balance, _) = py_position::py_amount(user_py_position);
         assert!(user_pt_balance >= pt_amount_in, error::aborted(17));
-        assert!(py_position::py_state_id(user_py_position) == market_pool.py_state_address, error::aborted(18));
-        assert!(market_pool.py_state_address == object::object_address(&market_pool_object), error::aborted(19));
+        // 确保 py_position 与 py_state 是同一个
+        assert!(py_position::py_state_id(user_py_position) == object::object_address(&py_state_object), error::permission_denied(13));
+        // 确保传入的market 与 py_state 相符
+        assert!(market_pool.py_state_address == object::object_address(&py_state_object), error::permission_denied(14));
         assert!(utils::now_milliseconds() < market_pool.expiry, error::aborted(20));
         let sy_metatda = fungible_asset::store_metadata(py::sy_metadata_address(py_state_object));
         // 3. 从预言机获取当前汇率
@@ -624,7 +632,7 @@ module stellaris::market {
         assert!(fungible_asset::amount(&received_sy_coin) >= min_sy_out, error::aborted(21));
 
         // 6. 返回用户应得的 SY 代币
-        received_sy_coin
+        primary_fungible_store::deposit(signer::address_of(user), received_sy_coin);
     }
 
     /// TODO: py_state_object 和 current_index_from_oracle 这个参数在方法内部没有被使用到
@@ -931,6 +939,64 @@ module stellaris::market {
             fixed_point64::encode(31536000000),
             fixed_point64::encode(time_to_expire)
         )
+    }
+
+    public entry fun seed_liquidity(
+        user: &signer,
+        sy_amount: u64,
+        user_py_position: Object<PyPosition>,
+        py_state: Object<PyState>,
+        market_pool_object: Object<MarketPool>
+    ) acquires MarketPool {
+        let market_pool = borrow_global_mut<MarketPool>(object::object_address(&market_pool_object));
+        assert!(utils::now_milliseconds() < market_pool.expiry, error::aborted(20));
+        // 确保用户的 SY 余额足够
+        let sy_metatda = fungible_asset::store_metadata(py::sy_metadata_address(py_state));
+        let if_sy = primary_fungible_store::is_balance_at_least(signer::address_of(user), sy_metatda, sy_amount);
+        assert!(if_sy, error::aborted(13));
+        // 确保 py_position 与 py_state 是同一个
+        assert!(py_position::py_state_id(user_py_position) == object::object_address(&py_state), error::permission_denied(13));
+        // 确保传入的market 与 py_state 相符
+        assert!(market_pool.py_state_address == object::object_address(&py_state), error::permission_denied(14));
+        // 取出用户的 sy 资产
+        let user_sy_balance = primary_fungible_store::withdraw(user, sy_metatda, sy_amount);
+        // 2. 从预言机获取当前汇率
+        let current_price = fixed_point64::from_u128(
+            (oracle::get_asset_price(object::object_address(&sy_metatda)) as u128)
+        );
+        // 3. 调用 yield_factory 的核心铸造函数 `mint_py_internal`
+        let pt_minted_amount = yield_factory::mint_py_internal(
+            fungible_asset::extract(&mut user_sy_balance, (sy_amount / 2)), // <--- 使用一半的 SY
+            current_price,
+            user_py_position,
+            py_state
+        );
+        // 4. 为用户创建一个新的 market position 对象
+        let constructor_ref = &object::create_object(signer::address_of(user));
+        let new_market_position = market_position::open_position(
+            constructor_ref,
+            object::object_address(&market_pool_object),
+            signer::address_of(user),
+            fungible_asset::name(sy_metatda),
+            market_pool.expiry
+        );
+        let remaining_sy_coin = mint_lp_internal(
+            pt_minted_amount,
+            sy_amount,
+            user_sy_balance,
+            current_price,
+            user_py_position,
+            py_state,
+            new_market_position,
+            market_pool,
+            object::object_address(&market_pool_object)
+        );
+        check_market_cap_internal(market_pool);
+
+        // 断言 `mint_lp_internal` 返回的剩余 SY Coin 数量为 0。
+        //    这是一个非常重要的健全性检查，确保所有资产都被精确计算并使用，没有留下任何“灰尘”。
+        assert!(fungible_asset::amount(&remaining_sy_coin) == 0, error::aborted(99));
+        fungible_asset::destroy_zero(remaining_sy_coin);
     }
 
     // public(package) fun update_current_exchange_rate(

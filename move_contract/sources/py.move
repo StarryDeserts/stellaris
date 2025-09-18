@@ -10,9 +10,9 @@ module stellaris::py {
     use aptos_framework::object::{Self, Object};
     use aptos_framework::primary_fungible_store;
 
-    use fixed_point64::fixed_point64::{Self, FixedPoint64};
+    use stellaris::fixed_point64::{Self, FixedPoint64};
     use stellaris::sy;
-    use stellaris::package_manager::{Self, is_owner, get_signer, get_resource_address};
+    use stellaris::package_manager::{Self, get_signer, get_resource_address};
 
     use stellaris::utils;
     use stellaris::token_registry;
@@ -62,7 +62,6 @@ module stellaris::py {
     }
 
     fun init_moudle(publisher: &signer) {
-        assert!(is_owner(signer::address_of(publisher)), error::not_implemented(10001));
         let store = PyStore {
             all_py_states: smart_vector::empty<address>()
         };
@@ -102,19 +101,20 @@ module stellaris::py {
     }
 
     // 为用户创建一个新的个人头寸
-    public fun init_py_position(
+    public entry fun init_py_position(
         user: &signer,
         sy_type_name: String,
         py_state_object: Object<PyState>
-    ) :Object<PyPosition> acquires PyState {
+    ) acquires PyState {
         let py_state = borrow_global<PyState>(object::object_address(&py_state_object));
         // 调用 py_position 模块的 open_position 函数
         py_position::open_position(
             &object::create_object(signer::address_of(user)),
             object::object_address(&py_state_object),
+            signer::address_of(user),
             sy_type_name,
             py_state.expiry
-        )
+        );
     }
 
     public(package) fun mint_py(
@@ -175,7 +175,7 @@ module stellaris::py {
     }
 
     /// 用户在市场到期后，将 PT 代币销毁以换取对应的 SY 代币
-    public fun burn_pt(
+    public entry fun burn_pt(
         user: &signer,
         amount: u64,
         pt_metadata_address: Object<Metadata>,
@@ -228,25 +228,27 @@ module stellaris::py {
     }
 
     /// 将用户 PyPosition (仓位对象) 中记录的 PT 余额，转换为一个可自由交易的、FungibleAsset 标准的 PT 对象
-    public fun redeem_pt(
+    public entry fun redeem_pt(
+        user: &signer,
         user_position: Object<PyPosition>,
         py_state_object: Object<PyState>,
         sy_type_name: String,
         pt_type_name: String
-    ) :FungibleAsset {
+    ) {
         assert!(py_position::pt_balance(user_position) > 0, error::invalid_argument(ERR_INVALID_PY_AMOUNT));
         let pt_to_redeem = py_position::pt_balance(user_position);
         py_position::set_pt_balance(
             user_position,
             0
         );
-        redeem_token(
+        let pt_asset = redeem_token(
             pt_to_redeem,
             py_state_object,
             user_position,
             sy_type_name,
             pt_type_name
-        )
+        );
+        primary_fungible_store::deposit(signer::address_of(user), pt_asset);
     }
 
     fun redeem_token(
@@ -294,7 +296,7 @@ module stellaris::py {
         (borrow_amount, flash_loan_pos)
     }
 
-    public fun repay_pt_amount(
+    public(package) fun repay_pt_amount(
         user_position: Object<PyPosition>,
         py_state: Object<PyState>,
         flash_loan_position: FlashLoanPosition,
@@ -424,21 +426,25 @@ module stellaris::py {
         latest_py_index
     }
 
+    #[view]
     public fun expiry(py_state_object: Object<PyState>) :u64 acquires PyState {
         let py_state = borrow_global<PyState>(object::object_address(&py_state_object));
         py_state.expiry
     }
 
+    #[view]
     public fun first_py_index(py_state_object: Object<PyState>) :FixedPoint64 acquires PyState {
         let py_state = borrow_global<PyState>(object::object_address(&py_state_object));
         py_state.first_py_index
     }
 
+    #[view]
     public fun sy_metadata_address(py_state_object: Object<PyState>) :Object<Metadata> acquires PyState {
         let py_state = borrow_global<PyState>(object::object_address(&py_state_object));
         store_metadata(py_state.sy_balance)
     }
 
+    #[view]
     public fun get_py_index(
         py_state_object: Object<PyState>,
     ) :(FixedPoint64, u64, FixedPoint64, FixedPoint64, FixedPoint64, u64, FixedPoint64) acquires PyState {

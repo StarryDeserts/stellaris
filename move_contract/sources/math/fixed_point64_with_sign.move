@@ -1,6 +1,6 @@
 /// Implementation of Signed FixedPoint u64 in Move language, extended from fixed_point64.
 module stellaris::fixed_point64_with_sign {
-    use fixed_point64::fixed_point64;  // Import the unsigned base module
+    use stellaris::fixed_point64;  // Import the unsigned base module
 
     // Reuse error codes from base module where applicable
     const ERR_MULTIPLY_RESULT_TOO_LARGE: u64 = 3;  // From base, for potential future use

@@ -1,6 +1,5 @@
 module stellaris::oracle {
     use std::error;
-    use std::signer;
     use aptos_std::smart_table;
     use aptos_std::smart_table::SmartTable;
     use aptos_framework::timestamp;
@@ -24,7 +23,6 @@ module stellaris::oracle {
     }
 
     fun init_module(account: &signer) {
-        assert!(package_manager::is_owner(signer::address_of(account)), error::not_implemented(10001));
         move_to(
             &package_manager::get_signer(),
             PriceOracleData {

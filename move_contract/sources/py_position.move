@@ -1,15 +1,22 @@
 module stellaris::py_position {
 
+    use std::error;
     use std::signer;
     use std::string::{Self, String};
+    use aptos_std::smart_table::{Self, SmartTable};
     use aptos_std::string_utils::to_string;
     use aptos_framework::event;
     use aptos_framework::object::{Self, ConstructorRef, Object};
-    use fixed_point64::fixed_point64::{Self, FixedPoint64};
+    use stellaris::fixed_point64::{Self, FixedPoint64};
+    use stellaris::package_manager::{is_owner, get_signer, get_resource_address};
     use stellaris::utils;
 
     const ONE_DAYS_MILLISECOND:u64 = 86400000;
     const SCALING_FACTOR:u64 = 100000000;
+
+    struct PyPositionRegistry has key {
+        user_position_address: SmartTable<address, address>
+    }
 
     struct PyPosition has key {
         py_state_id: address,
@@ -34,12 +41,21 @@ module stellaris::py_position {
         owner_address: address
     }
 
+    fun init(publisher: &signer) {
+        let py_position_registry = PyPositionRegistry {
+            user_position_address: smart_table::new<address, address>()
+        };
+        move_to(&get_signer(), py_position_registry);
+    }
+
     public(package) fun open_position(
         constructor_ref: &ConstructorRef,
+        user_address: address,
         py_state_id: address,
         yield_token_name: String,
         expiry: u64,
-    ) : Object<PyPosition> {
+    ) : Object<PyPosition> acquires PyPositionRegistry {
+        let py_position_registry = borrow_global_mut<PyPositionRegistry>(get_resource_address());
         let position_name = string::utf8(b"Stellaris PT&YT | ");
         position_name.append(yield_token_name);
         position_name.append(string::utf8(b" Pool "));
@@ -69,7 +85,9 @@ module stellaris::py_position {
             owner_address: signer::address_of(&signer)
         };
         event::emit<CreatePositionEvent>(create_position_event);
+        py_position_registry.user_position_address.add(user_address, object::address_from_constructor_ref(constructor_ref));
         object::object_from_constructor_ref<PyPosition>(constructor_ref)
+
     }
 
     public(package) fun set_accured(
@@ -142,26 +160,38 @@ module stellaris::py_position {
         result_string
     }
 
+
+    #[view]
+    public fun get_user_py_position_address(user_address: address) :address acquires PyPositionRegistry {
+        *borrow_global<PyPositionRegistry>(get_resource_address()).user_position_address.borrow(user_address)
+    }
+
+    #[view]
     public fun py_state_id(position_object: Object<PyPosition>) :address acquires PyPosition {
         borrow_global<PyPosition>(object::object_address(&position_object)).py_state_id
     }
 
+    #[view]
     public fun name(position_object: Object<PyPosition>) :String acquires PyPosition {
         borrow_global<PyPosition>(object::object_address(&position_object)).name
     }
 
+    #[view]
     public fun description(position_object: Object<PyPosition>) :String acquires PyPosition {
         borrow_global<PyPosition>(object::object_address(&position_object)).description
     }
 
+    #[view]
     public fun pt_balance(position_object: Object<PyPosition>) :u64 acquires PyPosition {
         borrow_global<PyPosition>(object::object_address(&position_object)).pt_balance
     }
 
+    #[view]
     public fun yt_balance(position_object: Object<PyPosition>) :u64 acquires PyPosition {
         borrow_global<PyPosition>(object::object_address(&position_object)).yt_balance
     }
 
+    #[view]
     public fun py_amount(position_object: Object<PyPosition>) :(u64, u64) acquires PyPosition {
         let position_data = borrow_global<PyPosition>(object::object_address(&position_object));
         let pt_balance = position_data.pt_balance;
@@ -169,22 +199,27 @@ module stellaris::py_position {
         (pt_balance, yt_balance)
     }
 
+    #[view]
     public fun yield_token(position_object: Object<PyPosition>) :String acquires PyPosition {
         borrow_global<PyPosition>(object::object_address(&position_object)).yield_token
     }
 
+    #[view]
     public fun expiry(position_object: Object<PyPosition>) :u64 acquires PyPosition {
         borrow_global<PyPosition>(object::object_address(&position_object)).expiry
     }
 
+    #[view]
     public fun index(position_object: Object<PyPosition>) :FixedPoint64 acquires PyPosition {
         borrow_global<PyPosition>(object::object_address(&position_object)).index
     }
 
+    #[view]
     public fun py_index(position_object: Object<PyPosition>) :FixedPoint64 acquires PyPosition {
         borrow_global<PyPosition>(object::object_address(&position_object)).py_index
     }
 
+    #[view]
     public fun accured(position_object: Object<PyPosition>) :FixedPoint64 acquires PyPosition {
         borrow_global<PyPosition>(object::object_address(&position_object)).accured
     }

@@ -1,9 +1,9 @@
 module stellaris::market_global {
 
+    use stellaris::package_manager;
     use aptos_std::smart_table::{Self, SmartTable};
     use aptos_std::smart_vector::{Self, SmartVector};
-    use fixed_point64::fixed_point64::{Self, FixedPoint64};
-    use stellaris::package_manager;
+    use stellaris::fixed_point64::{Self, FixedPoint64};
 
     struct MarketFactoryConfig has key {
         treasury: address,

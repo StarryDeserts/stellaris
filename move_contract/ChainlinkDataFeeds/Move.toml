@@ -14,7 +14,7 @@ owner = "0xcafe"
 platform = "0xbaba"
 
 [dependencies]
-AptosFramework = { git = "https://github.com/aptos-labs/aptos-framework.git", rev = "mainnet", subdir = "aptos-framework" }
+AptosFramework = { git = "https://github.com/aptos-labs/aptos-framework.git", rev = "testnet", subdir = "aptos-framework" }
 ChainlinkPlatform = { local = "../ChainlinkPlatform" }
 
 [dev-dependencies]
