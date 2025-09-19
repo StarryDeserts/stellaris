@@ -18,7 +18,9 @@ module stellaris::router {
     use stellaris::math_fixed64_with_sign;
     use stellaris::fixed_point64_with_sign::FixedPoint64WithSign;
     use stellaris::market::{Self, MarketPoolCache, MarketPool, get_market_pool_cache};
-
+    
+    const ORACLE_PRECISION_FACTOR: u128 = 1000000000000000000u128;
+    
     #[event]
     struct SwapYTEvent has store, drop {
         market_state_address: address,
@@ -46,8 +48,12 @@ module stellaris::router {
         // 取出用户的 sy 资产
         let user_sy_balance = primary_fungible_store::withdraw(user, sy_metatda, sy_amount);
         // 3. 从预言机获取底层资产的当前价格
-        let current_price = fixed_point64::from_u128(
-            (oracle::get_asset_price(object::object_address(&sy_metatda)) as u128)
+        let current_price = fixed_point64::fraction_u128(
+            (oracle::get_asset_price(object::object_address(&sy_metatda)) as u128), ORACLE_PRECISION_FACTOR
+        );
+
+        let current_price = fixed_point64::fraction_u128(
+            (oracle::get_asset_price(object::object_address(&sy_metatda)) as u128), ORACLE_PRECISION_FACTOR
         );
 
         // 4. 为用户创建一个新的流动性仓位对象
@@ -167,8 +173,8 @@ module stellaris::router {
     )  {
         // 2. 获取预言机价格并创建市场状态缓存
         let sy_metatda = py::sy_metadata_address(py_state_object);
-        let current_price = fixed_point64::from_u128(
-            (oracle::get_asset_price(object::object_address(&sy_metatda)) as u128)
+        let current_price = fixed_point64::fraction_u128(
+            (oracle::get_asset_price(object::object_address(&sy_metatda)) as u128), ORACLE_PRECISION_FACTOR
         );
         let market_state_cache = market::get_market_pool_cache(
             current_price,

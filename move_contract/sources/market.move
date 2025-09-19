@@ -19,13 +19,14 @@ module stellaris::market {
     use stellaris::market_math;
     use stellaris::py::PyState;
     use stellaris::market_global;
-    use stellaris::py_position::{Self, PyPosition};
     use stellaris::math_fixed64_with_sign;
     use stellaris::fixed_point64_with_sign;
-    use stellaris::package_manager::{Self, get_signer, get_resource_address};
+    use stellaris::py_position::{Self, PyPosition};
     use stellaris::market_position::{Self, MarketPosition};
     use stellaris::fixed_point64_with_sign::FixedPoint64WithSign;
+    use stellaris::package_manager::{Self, get_signer, get_resource_address};
 
+    const ORACLE_PRECISION_FACTOR: u128 = 1000000000000000000u128;
 
     /// 代表一个完整的、独立的 PT/SY 交易池。协议中每个不同到期日的市场都会有一个自己专属的 MarketPool 对象
     struct MarketPool has key {
@@ -109,6 +110,7 @@ module stellaris::market {
     }
 
 
+    // TODO：测试网版本，可见性应该设置为私有的
     public fun get_market_pool_cache_internal(
         current_price_from_oracle: FixedPoint64,
         market_pool: &MarketPool,
@@ -134,6 +136,7 @@ module stellaris::market {
         }
     }
 
+    // TODO：测试网版本，可见性应该设置为 package
     public fun get_market_pool_cache(
         current_price_from_oracle: FixedPoint64,
         market_pool_object: Object<MarketPool>,
@@ -198,8 +201,8 @@ module stellaris::market {
             market_pool.expiry
         );
         // 3. 从预言机获取当前汇率
-        let current_price = fixed_point64::from_u128(
-            (oracle::get_asset_price(object::object_address(&sy_metatda)) as u128)
+        let current_price = fixed_point64::fraction_u128(
+            (oracle::get_asset_price(object::object_address(&sy_metatda)) as u128), ORACLE_PRECISION_FACTOR
         );
         let remaining_sy_coin = mint_lp_internal(
             pt_amount_to_add,
@@ -442,8 +445,8 @@ module stellaris::market {
         // 取出用户的 sy 资产
         let user_sy_balance = primary_fungible_store::withdraw(user, sy_metatda, sy_amount);
         // 3. 从预言机获取当前汇率
-        let current_price = fixed_point64::from_u128(
-            (oracle::get_asset_price(object::object_address(&sy_metatda)) as u128)
+        let current_price = fixed_point64::fraction_u128(
+            (oracle::get_asset_price(object::object_address(&sy_metatda)) as u128), ORACLE_PRECISION_FACTOR
         );
         // 3. 生成市场状态缓存，为核心计算做准备
         let market_cache = get_market_pool_cache_internal(
@@ -608,8 +611,8 @@ module stellaris::market {
         assert!(utils::now_milliseconds() < market_pool.expiry, error::aborted(20));
         let sy_metatda = py::sy_metadata_address(py_state_object);
         // 3. 从预言机获取当前汇率
-        let current_price = fixed_point64::from_u128(
-            (oracle::get_asset_price(object::object_address(&sy_metatda)) as u128)
+        let current_price = fixed_point64::fraction_u128(
+            (oracle::get_asset_price(object::object_address(&sy_metatda)) as u128), ORACLE_PRECISION_FACTOR
         );
         // 3. 生成市场状态缓存，为核心计算做准备
         let market_cache = get_market_pool_cache_internal(
@@ -960,8 +963,8 @@ module stellaris::market {
         // 取出用户的 sy 资产
         let user_sy_balance = primary_fungible_store::withdraw(user, sy_metatda, sy_amount);
         // 2. 从预言机获取当前汇率
-        let current_price = fixed_point64::from_u128(
-            (oracle::get_asset_price(object::object_address(&sy_metatda)) as u128)
+        let current_price = fixed_point64::fraction_u128(
+            (oracle::get_asset_price(object::object_address(&sy_metatda)) as u128), ORACLE_PRECISION_FACTOR
         );
         // 3. 调用 yield_factory 的核心铸造函数 `mint_py_internal`
         let pt_minted_amount = yield_factory::mint_py_internal(
