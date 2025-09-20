@@ -439,6 +439,12 @@ module stellaris::py {
     }
 
     #[view]
+    public fun sy_balance(py_state_object: Object<PyState>) :u64 acquires PyState {
+        let py_state = borrow_global<PyState>(object::object_address(&py_state_object));
+        fungible_asset::balance(py_state.sy_balance)
+    }
+
+    #[view]
     public fun sy_metadata_address(py_state_object: Object<PyState>) :Object<Metadata> acquires PyState {
         let py_state = borrow_global<PyState>(object::object_address(&py_state_object));
         store_metadata(py_state.sy_balance)

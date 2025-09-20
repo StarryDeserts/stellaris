@@ -1000,6 +1000,7 @@ module stellaris::market {
         fungible_asset::destroy_zero(remaining_sy_coin);
     }
 
+
     // public(package) fun update_current_exchange_rate(
     //     current_index_from_oracle: FixedPoint64,
     //     py_state_object: Object<PyState>,

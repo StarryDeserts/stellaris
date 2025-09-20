@@ -190,6 +190,16 @@ module stellaris::py_position {
     }
 
     #[view]
+    public fun pt_balance_display(position_object: Object<PyPosition>) :String acquires PyPosition {
+        borrow_global<PyPosition>(object::object_address(&position_object)).pt_balance_display
+    }
+
+    #[view]
+    public fun yt_balance_display(position_object: Object<PyPosition>) :String acquires PyPosition {
+        borrow_global<PyPosition>(object::object_address(&position_object)).yt_balance_display
+    }
+
+    #[view]
     public fun py_amount(position_object: Object<PyPosition>) :(u64, u64) acquires PyPosition {
         let position_data = borrow_global<PyPosition>(object::object_address(&position_object));
         let pt_balance = position_data.pt_balance;
