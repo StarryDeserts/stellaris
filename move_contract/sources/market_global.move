@@ -15,7 +15,7 @@ module stellaris::market_global {
         markets: SmartVector<address>,
     }
 
-    fun init_module(_account: &signer) {
+    fun init_module(account: &signer) {
         let _max_reserve_fee_percent = fixed_point64::fraction(1, 1);
         let config = MarketFactoryConfig {
             treasury: @stellaris,

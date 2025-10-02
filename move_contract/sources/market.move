@@ -9,7 +9,7 @@ module stellaris::market {
     use aptos_framework::primary_fungible_store;
     use aptos_framework::object::{Self, Object};
     use stellaris::fixed_point64::{Self, FixedPoint64};
-    use aptos_framework::fungible_asset::{Self, FungibleStore, FungibleAsset};
+    use aptos_framework::fungible_asset::{Self, FungibleStore, FungibleAsset, Metadata, store_metadata};
     use stellaris::yield_factory;
     use stellaris::oracle;
 
@@ -27,6 +27,30 @@ module stellaris::market {
     use stellaris::package_manager::{Self, get_signer, get_resource_address};
 
     const ORACLE_PRECISION_FACTOR: u128 = 1000000000000000000u128;
+
+    // --- Error Codes ---
+    // 错误码从 1001 开始，以避免与标准库或其他模块冲突
+    const E_INITIAL_LIQUIDITY_TOO_LOW: u64 = 1001;
+    const E_LN_IMPLIED_RATE_IS_ZERO: u64 = 1002;
+    const E_LP_AMOUNT_IS_ZERO: u64 = 1003;
+    const E_SY_JOIN_AMOUNT_IS_ZERO: u64 = 1004;
+    const E_PT_JOIN_AMOUNT_IS_ZERO: u64 = 1005;
+    const E_INSUFFICIENT_PT_IN_POOL_FOR_SWAP: u64 = 1006;
+    const E_EXCHANGE_RATE_BELOW_ONE: u64 = 1007;
+    const E_INSUFFICIENT_SY_IN_POOL_FOR_SWAP: u64 = 1008;
+    const E_MARKET_EXPIRED: u64 = 1009;
+    const E_ZERO_PT_AMOUNT_SPECIFIED: u64 = 1010;
+    const E_INSUFFICIENT_USER_PT_BALANCE: u64 = 1011;
+    const E_INSUFFICIENT_USER_SY_BALANCE: u64 = 1012;
+    const E_PY_POSITION_MISMATCH: u64 = 1013;
+    const E_MARKET_PY_STATE_MISMATCH: u64 = 1014;
+    const E_MARKET_CAP_EXCEEDED: u64 = 1015;
+    const E_INSUFFICIENT_LP_OUTPUT: u64 = 1016;
+    const E_PY_POSITION_MARKET_MISMATCH: u64 = 1017;
+    const E_MARKET_ADDRESS_MISMATCH: u64 = 1018;
+    const E_SLIPPAGE_TOLERANCE_EXCEEDED: u64 = 1019;
+    const E_SEED_LIQUIDITY_REMAINDER_NOT_ZERO: u64 = 1020;
+
 
     /// 代表一个完整的、独立的 PT/SY 交易池。协议中每个不同到期日的市场都会有一个自己专属的 MarketPool 对象
     struct MarketPool has key {
@@ -175,19 +199,19 @@ module stellaris::market {
     ) acquires MarketPool {
         let (user_pt_balance, _) = py_position::py_amount(user_py_position);
         let market_pool = borrow_global_mut<MarketPool>(object::object_address(&market_pool_object));
-        assert!(utils::now_milliseconds() < py_position::expiry(user_py_position), error::invalid_argument(10));
+        assert!(utils::now_milliseconds() < py_position::expiry(user_py_position), error::invalid_argument(E_MARKET_EXPIRED));
         // 确保想要获得的 PT 大于 0
-        assert!(pt_amount_to_add > 0, error::aborted(11));
+        assert!(pt_amount_to_add > 0, error::aborted(E_ZERO_PT_AMOUNT_SPECIFIED));
         // 确保用户在 py_position 中的余额足够
-        assert!(user_pt_balance >= pt_amount_to_add, error::aborted(12));
+        assert!(user_pt_balance >= pt_amount_to_add, error::aborted(E_INSUFFICIENT_USER_PT_BALANCE));
         // 确保用户的 SY 余额足够
         let sy_metatda = py::sy_metadata_address(py_state);
         let if_sy = primary_fungible_store::is_balance_at_least(signer::address_of(user), sy_metatda, sy_amount);
-        assert!(if_sy, error::aborted(13));
+        assert!(if_sy, error::aborted(E_INSUFFICIENT_USER_SY_BALANCE));
         // 确保 py_position 与 py_state 是同一个
-        assert!(py_position::py_state_id(user_py_position) == object::object_address(&py_state), error::permission_denied(13));
+        assert!(py_position::py_state_id(user_py_position) == object::object_address(&py_state), error::permission_denied(E_PY_POSITION_MISMATCH));
         // 确保传入的market 与 py_state 相符
-        assert!(market_pool.py_state_address == object::object_address(&py_state), error::permission_denied(14));
+        assert!(market_pool.py_state_address == object::object_address(&py_state), error::permission_denied(E_MARKET_PY_STATE_MISMATCH));
         // 取出用户的 sy 资产
         let user_sy_balance = primary_fungible_store::withdraw(user, sy_metatda, sy_amount);
 
@@ -215,7 +239,7 @@ module stellaris::market {
             object::object_address(&market_pool_object)
         );
         check_market_cap_internal(market_pool);
-        assert!(market_position::lp_amount(new_market_position) >= min_lp_out, error::aborted(16)); // 检查产出的LP是否满足最小期望
+        assert!(market_position::lp_amount(new_market_position) >= min_lp_out, error::aborted(E_INSUFFICIENT_LP_OUTPUT)); // 检查产出的LP是否满足最小期望
         // 6. 返回多余的SY代币和新创建的LP头寸对象
         primary_fungible_store::deposit(signer::address_of(user), remaining_sy_coin);
     }
@@ -237,7 +261,7 @@ module stellaris::market {
             // 1. 计算初始 LP 数量。公式为 PT 和 SY 数量的几何平均数。
             let initial_lp_total = (math128::sqrt((pt_amount_in as u128) * (sy_token_amount as u128)) as u64);
             // 确保初始流动性不低于一个阈值
-            assert!(initial_lp_total >= 1000, error::aborted(2));
+            assert!(initial_lp_total >= 1000, error::aborted(E_INITIAL_LIQUIDITY_TOO_LOW));
             // 2. 为了防止精度损失和三明治攻击，协议会永久锁定一小部分LP（1000个单位）
             let user_lp_to_receive = initial_lp_total - 1000;
             // 3. 更新状态
@@ -252,7 +276,7 @@ module stellaris::market {
             // 5. 初始化市场的隐含利率
             let exchange_rate = get_exchange_rate(py_state, market_pool, current_index_from_oracle, true);
             market_pool.last_ln_implied_rate = get_ln_implied_rate(exchange_rate, market_pool.expiry - utils::now_milliseconds());
-            assert!(!fixed_point64::eq(&market_pool.last_ln_implied_rate, &fixed_point64::zero()), error::invalid_argument(3));
+            assert!(!fixed_point64::eq(&market_pool.last_ln_implied_rate, &fixed_point64::zero()), error::invalid_argument(E_LN_IMPLIED_RATE_IS_ZERO));
             // 发布添加流动性的事件
             event::emit(AddLiquidityEvent {
                 market_state_address: market_pool_address,
@@ -269,13 +293,13 @@ module stellaris::market {
             // 1. 根据当前池中 PT 和 SY 的比例，计算出添加等值流动性应该获得的 LP 数量
             let lp_from_pt = (((pt_amount_in as u128) * (market_pool.lp_supply as u128) / (market_pool.total_pt as u128)) as u64);
             let lp_from_sy = (((sy_token_amount as u128) * (market_pool.lp_supply as u128) / (fungible_asset::balance(market_pool.total_sy) as u128)) as u64);
-            assert!(lp_from_pt > 0 && lp_from_sy > 0, error::invalid_argument(4));
+            assert!(lp_from_pt > 0 && lp_from_sy > 0, error::invalid_argument(E_LP_AMOUNT_IS_ZERO));
             // 2. 选择较小的一方作为本次获得的 LP 数量，以确保是按当前价格比例添加的。多余的另一种代币将被退还
             if (lp_from_pt < lp_from_sy) {
                 // 以 PT 为准，计算需要多少 SY, 多余的 SY 将被退还
                 let user_lp_to_receive = lp_from_pt;
                 let sy_to_join_market = ((((fungible_asset::balance(market_pool.total_sy) as u128) * (user_lp_to_receive as u128) + ((market_pool.lp_supply - 1) as u128)) / (market_pool.lp_supply as u128)) as u64);
-                assert!(sy_to_join_market > 0, error::invalid_argument(5));
+                assert!(sy_to_join_market > 0, error::invalid_argument(E_SY_JOIN_AMOUNT_IS_ZERO));
                 // 更新状态
                 market_pool.total_pt += pt_amount_in;
                 py::split_pt(pt_amount_in, user_py_position);
@@ -301,12 +325,15 @@ module stellaris::market {
                 // 以 SY 为准，计算需要多少 PT，多余的 PT 将被退还
                 let _user_lp_to_receive = lp_from_sy;
                 let pt_to_join_market = ((((market_pool.total_pt as u128) * (_user_lp_to_receive as u128) + ((market_pool.lp_supply - 1) as u128)) / (market_pool.lp_supply as u128)) as u64);
-                assert!(pt_to_join_market > 0, error::invalid_argument(6));
+                assert!(pt_to_join_market > 0, error::invalid_argument(E_PT_JOIN_AMOUNT_IS_ZERO));
                 // 更新状态
                 fungible_asset::deposit(market_pool.total_sy, fungible_asset::extract(&mut user_sy_balance, sy_token_amount));
                 py::split_pt(pt_to_join_market, user_py_position);
                 market_pool.total_pt += pt_to_join_market;
                 market_pool.lp_supply += _user_lp_to_receive;
+                // 更新用户头寸
+                market_position::increase_lp_amount(user_market_position, _user_lp_to_receive);
+                market_position::update_lp_display(user_market_position);
                 // 发布添加流动性的事件
                 event::emit(AddLiquidityEvent {
                     market_state_address: market_pool_address,
@@ -339,7 +366,7 @@ module stellaris::market {
             // 1. 计算初始 LP 数量。公式为 PT 和 SY 数量的几何平均数。
             let initial_lp_total = (math128::sqrt((pt_amount_in as u128) * (sy_token_amount as u128)) as u64);
             // 确保初始流动性不低于一个阈值
-            assert!(initial_lp_total >= 1000, error::aborted(2));
+            assert!(initial_lp_total >= 1000, error::aborted(E_INITIAL_LIQUIDITY_TOO_LOW));
             // 2. 为了防止精度损失和三明治攻击，协议会永久锁定一小部分LP（1000个单位）
             let user_lp_to_receive = initial_lp_total - 1000;
             // 3. 更新状态
@@ -354,7 +381,7 @@ module stellaris::market {
             // 5. 初始化市场的隐含利率
             let exchange_rate = get_exchange_rate(py_state, market_pool, current_index_from_oracle, true);
             market_pool.last_ln_implied_rate = get_ln_implied_rate(exchange_rate, market_pool.expiry - utils::now_milliseconds());
-            assert!(!fixed_point64::eq(&market_pool.last_ln_implied_rate, &fixed_point64::zero()), error::invalid_argument(3));
+            assert!(!fixed_point64::eq(&market_pool.last_ln_implied_rate, &fixed_point64::zero()), error::invalid_argument(E_LN_IMPLIED_RATE_IS_ZERO));
             // 发布添加流动性的事件
             event::emit(AddLiquidityEvent {
                 market_state_address: object::object_address(&market_pool_object),
@@ -371,13 +398,13 @@ module stellaris::market {
             // 1. 根据当前池中 PT 和 SY 的比例，计算出添加等值流动性应该获得的 LP 数量
             let lp_from_pt = (((pt_amount_in as u128) * (market_pool.lp_supply as u128) / (market_pool.total_pt as u128)) as u64);
             let lp_from_sy = (((sy_token_amount as u128) * (market_pool.lp_supply as u128) / (fungible_asset::balance(market_pool.total_sy) as u128)) as u64);
-            assert!(lp_from_pt > 0 && lp_from_sy > 0, error::invalid_argument(4));
+            assert!(lp_from_pt > 0 && lp_from_sy > 0, error::invalid_argument(E_LP_AMOUNT_IS_ZERO));
             // 2. 选择较小的一方作为本次获得的 LP 数量，以确保是按当前价格比例添加的。多余的另一种代币将被退还
             if (lp_from_pt < lp_from_sy) {
                 // 以 PT 为准，计算需要多少 SY, 多余的 SY 将被退还
                 let user_lp_to_receive = lp_from_pt;
                 let sy_to_join_market = ((((fungible_asset::balance(market_pool.total_sy) as u128) * (user_lp_to_receive as u128) + ((market_pool.lp_supply - 1) as u128)) / (market_pool.lp_supply as u128)) as u64);
-                assert!(sy_to_join_market > 0, error::invalid_argument(5));
+                assert!(sy_to_join_market > 0, error::invalid_argument(E_SY_JOIN_AMOUNT_IS_ZERO));
                 // 更新状态
                 market_pool.total_pt += pt_amount_in;
                 py::split_pt(pt_amount_in, user_py_position);
@@ -403,7 +430,7 @@ module stellaris::market {
                 // 以 SY 为准，计算需要多少 PT，多余的 PT 将被退还
                 let _user_lp_to_receive = lp_from_sy;
                 let pt_to_join_market = ((((market_pool.total_pt as u128) * (_user_lp_to_receive as u128) + ((market_pool.lp_supply - 1) as u128)) / (market_pool.lp_supply as u128)) as u64);
-                assert!(pt_to_join_market > 0, error::invalid_argument(6));
+                assert!(pt_to_join_market > 0, error::invalid_argument(E_PT_JOIN_AMOUNT_IS_ZERO));
                 // 更新状态
                 fungible_asset::deposit(market_pool.total_sy, fungible_asset::extract(&mut user_sy_balance, sy_token_amount));
                 py::split_pt(pt_to_join_market, user_py_position);
@@ -434,14 +461,15 @@ module stellaris::market {
     )  acquires MarketPool {
         let market_pool = borrow_global_mut<MarketPool>(object::object_address(&market_pool_object));
         // 确保 py_position 与 py_state 是同一个
-        assert!(py_position::py_state_id(user_py_position) == object::object_address(&py_state_object), error::permission_denied(13));
+        assert!(py_position::py_state_id(user_py_position) == object::object_address(&py_state_object), error::permission_denied(E_PY_POSITION_MISMATCH));
         // 确保传入的market 与 py_state 相符
-        assert!(market_pool.py_state_address == object::object_address(&py_state_object), error::permission_denied(14));assert!(py_position::py_state_id(user_py_position) == market_pool.py_state_address, error::aborted(18));
-        assert!(market_pool.py_state_address == object::object_address(&market_pool_object), error::aborted(19));
-        assert!(exact_pt_out <= market_pool.total_pt, error::aborted(21));
+        assert!(market_pool.py_state_address == object::object_address(&py_state_object), error::permission_denied(E_MARKET_PY_STATE_MISMATCH));
+        assert!(py_position::py_state_id(user_py_position) == market_pool.py_state_address, error::aborted(E_PY_POSITION_MARKET_MISMATCH));
+        assert!(market_pool.py_state_address == object::object_address(&market_pool_object), error::aborted(E_MARKET_ADDRESS_MISMATCH));
+        assert!(exact_pt_out <= market_pool.total_pt, error::aborted(E_INSUFFICIENT_PT_IN_POOL_FOR_SWAP));
         let sy_metatda = py::sy_metadata_address(py_state_object);
         let if_sy = primary_fungible_store::is_balance_at_least(signer::address_of(user), sy_metatda, sy_amount);
-        assert!(if_sy, error::aborted(13));
+        assert!(if_sy, error::aborted(E_INSUFFICIENT_USER_SY_BALANCE));
         // 取出用户的 sy 资产
         let user_sy_balance = primary_fungible_store::withdraw(user, sy_metatda, sy_amount);
         // 3. 从预言机获取当前汇率
@@ -603,12 +631,12 @@ module stellaris::market {
     ) acquires MarketPool {
         let market_pool = borrow_global_mut<MarketPool>(object::object_address(&market_pool_object));
         let (user_pt_balance, _) = py_position::py_amount(user_py_position);
-        assert!(user_pt_balance >= pt_amount_in, error::aborted(17));
+        assert!(user_pt_balance >= pt_amount_in, error::aborted(E_INSUFFICIENT_USER_PT_BALANCE));
         // 确保 py_position 与 py_state 是同一个
-        assert!(py_position::py_state_id(user_py_position) == object::object_address(&py_state_object), error::permission_denied(13));
+        assert!(py_position::py_state_id(user_py_position) == object::object_address(&py_state_object), error::permission_denied(E_PY_POSITION_MISMATCH));
         // 确保传入的market 与 py_state 相符
-        assert!(market_pool.py_state_address == object::object_address(&py_state_object), error::permission_denied(14));
-        assert!(utils::now_milliseconds() < market_pool.expiry, error::aborted(20));
+        assert!(market_pool.py_state_address == object::object_address(&py_state_object), error::permission_denied(E_MARKET_PY_STATE_MISMATCH));
+        assert!(utils::now_milliseconds() < market_pool.expiry, error::aborted(E_MARKET_EXPIRED));
         let sy_metatda = py::sy_metadata_address(py_state_object);
         // 3. 从预言机获取当前汇率
         let current_price = fixed_point64::fraction_u128(
@@ -631,7 +659,7 @@ module stellaris::market {
             object::object_address(&market_pool_object)
         );
         // 5. 滑点检查：确保用户收到的 SY 不低于其设定的最小值
-        assert!(fungible_asset::amount(&received_sy_coin) >= min_sy_out, error::aborted(21));
+        assert!(fungible_asset::amount(&received_sy_coin) >= min_sy_out, error::aborted(E_SLIPPAGE_TOLERANCE_EXCEEDED));
 
         // 6. 返回用户应得的 SY 代币
         primary_fungible_store::deposit(signer::address_of(user), received_sy_coin);
@@ -662,7 +690,7 @@ module stellaris::market {
         assert!(
             fixed_point64_with_sign::less_or_equal(sy_out_gross, reserve_fee) ||
                 fixed_point64_with_sign::truncate(fixed_point64_with_sign::sub(sy_out_gross, reserve_fee)) <= fungible_asset::balance(market_pool.total_sy),
-            error::aborted(9)
+            error::aborted(E_INSUFFICIENT_SY_IN_POOL_FOR_SWAP)
         );
 
         // 3. 更新市场和用户状态
@@ -672,7 +700,6 @@ module stellaris::market {
         // 4. 处理费用和支付
         // 将金库费用（reserve_fee）转入 vault
         let reserve_fee_amount = fixed_point64_with_sign::truncate(reserve_fee);
-        // balance::join(&mut market_state.vault, coin::into_balance(coin::take(&mut market_state.total_sy, reserve_fee_amount, ctx)));
         fungible_asset::deposit(market_pool.vault, fungible_asset::withdraw(&get_signer(), market_pool.total_sy, reserve_fee_amount));
 
         // 5. 计算并更新交易后的市场汇率和隐含利率
@@ -727,7 +754,7 @@ module stellaris::market {
         assert!(
             fixed_point64_with_sign::less_or_equal(sy_out_gross, reserve_fee) ||
                 fixed_point64_with_sign::truncate(fixed_point64_with_sign::sub(sy_out_gross, reserve_fee)) <= fungible_asset::balance(market_pool.total_sy),
-            error::aborted(9)
+            error::aborted(E_INSUFFICIENT_SY_IN_POOL_FOR_SWAP)
         );
 
         // 3. 更新市场和用户状态
@@ -780,7 +807,7 @@ module stellaris::market {
         FixedPoint64WithSign
     ) {
         // 1. 确保池中有足够的 PT 供用户购买
-        assert!(fixed_point64_with_sign::less_or_equal(pt_delta, fixed_point64_with_sign::from_uint64(market_pool.total_pt)), error::aborted(7));
+        assert!(fixed_point64_with_sign::less_or_equal(pt_delta, fixed_point64_with_sign::from_uint64(market_pool.total_pt)), error::aborted(E_INSUFFICIENT_PT_IN_POOL_FOR_SWAP));
         // 2. 从缓存中解包关键参数
         let rate_scalar = market_cache.rate_scalar;
         let rate_anchor = market_cache.rate_anchor;
@@ -803,7 +830,7 @@ module stellaris::market {
             // ---- 用户买入 PT / 支付 SY ----
             // 费用从用户支付的 SY 中收取。
             // net_sy = ideal_sy * (1 - fee_rate)
-            assert!(fixed_point64_with_sign::greater_or_equal(math_fixed64_with_sign::div(effective_exchange_rate, fee_rate), fixed_point64_with_sign::one()), error::invalid_argument(8));
+            assert!(fixed_point64_with_sign::greater_or_equal(math_fixed64_with_sign::div(effective_exchange_rate, fee_rate), fixed_point64_with_sign::one()), error::invalid_argument(E_EXCHANGE_RATE_BELOW_ONE));
             math_fixed64_with_sign::mul(ideal_sy_amount, fixed_point64_with_sign::sub(fixed_point64_with_sign::one(), fee_rate))
         } else {
             // ---- 用户卖出 PT / 收到 SY ----
@@ -854,7 +881,7 @@ module stellaris::market {
     ) acquires MarketPool {
         let market_pool = borrow_global_mut<MarketPool>(object::object_address(&market_pool_object));
         // 1. 确保池中有足够的 PT 供用户购买
-        assert!(fixed_point64_with_sign::less_or_equal(pt_delta, fixed_point64_with_sign::from_uint64(market_pool.total_pt)), error::aborted(7));
+        assert!(fixed_point64_with_sign::less_or_equal(pt_delta, fixed_point64_with_sign::from_uint64(market_pool.total_pt)), error::aborted(E_INSUFFICIENT_PT_IN_POOL_FOR_SWAP));
         // 2. 从缓存中解包关键参数
         let rate_scalar = market_cache.rate_scalar;
         let rate_anchor = market_cache.rate_anchor;
@@ -877,7 +904,7 @@ module stellaris::market {
             // ---- 用户买入 PT / 支付 SY ----
             // 费用从用户支付的 SY 中收取。
             // net_sy = ideal_sy * (1 - fee_rate)
-            assert!(fixed_point64_with_sign::greater_or_equal(math_fixed64_with_sign::div(effective_exchange_rate, fee_rate), fixed_point64_with_sign::one()), error::invalid_argument(8));
+            assert!(fixed_point64_with_sign::greater_or_equal(math_fixed64_with_sign::div(effective_exchange_rate, fee_rate), fixed_point64_with_sign::one()), error::invalid_argument(E_EXCHANGE_RATE_BELOW_ONE));
             math_fixed64_with_sign::mul(ideal_sy_amount, fixed_point64_with_sign::sub(fixed_point64_with_sign::one(), fee_rate))
         } else {
             // ---- 用户卖出 PT / 收到 SY ----
@@ -916,11 +943,11 @@ module stellaris::market {
     }
 
     public(package) fun check_market_cap_internal(market_pool: &MarketPool)  {
-        assert!(market_pool.market_cap == 0 || fungible_asset::balance(market_pool.total_sy) <= market_pool.market_cap, error::aborted(15));
+        assert!(market_pool.market_cap == 0 || fungible_asset::balance(market_pool.total_sy) <= market_pool.market_cap, error::aborted(E_MARKET_CAP_EXCEEDED));
     }
     public(package) fun check_market_cap(market_pool_object: Object<MarketPool>) acquires MarketPool {
         let market_pool = borrow_global<MarketPool>(object::object_address(&market_pool_object));
-        assert!(market_pool.market_cap == 0 || fungible_asset::balance(market_pool.total_sy) <= market_pool.market_cap, error::aborted(15));
+        assert!(market_pool.market_cap == 0 || fungible_asset::balance(market_pool.total_sy) <= market_pool.market_cap, error::aborted(E_MARKET_CAP_EXCEEDED));
     }
 
     fun get_ln_implied_rate(
@@ -951,15 +978,15 @@ module stellaris::market {
         market_pool_object: Object<MarketPool>
     ) acquires MarketPool {
         let market_pool = borrow_global_mut<MarketPool>(object::object_address(&market_pool_object));
-        assert!(utils::now_milliseconds() < market_pool.expiry, error::aborted(20));
+        assert!(utils::now_milliseconds() < market_pool.expiry, error::aborted(E_MARKET_EXPIRED));
         // 确保用户的 SY 余额足够
         let sy_metatda = py::sy_metadata_address(py_state);
         let if_sy = primary_fungible_store::is_balance_at_least(signer::address_of(user), sy_metatda, sy_amount);
-        assert!(if_sy, error::aborted(13));
+        assert!(if_sy, error::aborted(E_INSUFFICIENT_USER_SY_BALANCE));
         // 确保 py_position 与 py_state 是同一个
-        assert!(py_position::py_state_id(user_py_position) == object::object_address(&py_state), error::permission_denied(13));
+        assert!(py_position::py_state_id(user_py_position) == object::object_address(&py_state), error::permission_denied(E_PY_POSITION_MISMATCH));
         // 确保传入的market 与 py_state 相符
-        assert!(market_pool.py_state_address == object::object_address(&py_state), error::permission_denied(14));
+        assert!(market_pool.py_state_address == object::object_address(&py_state), error::permission_denied(E_MARKET_PY_STATE_MISMATCH));
         // 取出用户的 sy 资产
         let user_sy_balance = primary_fungible_store::withdraw(user, sy_metatda, sy_amount);
         // 2. 从预言机获取当前汇率
@@ -996,7 +1023,7 @@ module stellaris::market {
 
         // 断言 `mint_lp_internal` 返回的剩余 SY Coin 数量为 0。
         //    这是一个非常重要的健全性检查，确保所有资产都被精确计算并使用，没有留下任何“灰尘”。
-        assert!(fungible_asset::amount(&remaining_sy_coin) == 0, error::aborted(99));
+        assert!(fungible_asset::amount(&remaining_sy_coin) == 0, error::aborted(E_SEED_LIQUIDITY_REMAINDER_NOT_ZERO));
         fungible_asset::destroy_zero(remaining_sy_coin);
     }
 
@@ -1142,6 +1169,19 @@ module stellaris::market {
         fungible_asset::balance(market_pool.total_sy)
     }
 
+    #[view]
+    public fun get_market_binding_py_state(market_pool_object: Object<MarketPool>): address acquires MarketPool {
+        let market_pool = borrow_global_mut<MarketPool>(object::object_address(&market_pool_object));
+        market_pool.py_state_address
+    }
+
+
+    #[view]
+    public fun get_market_lp_supply(market_pool_object: Object<MarketPool>) : u64 acquires MarketPool {
+        let market_pool = borrow_global_mut<MarketPool>(object::object_address(&market_pool_object));
+        market_pool.lp_supply
+    }
+
     public(package) fun join_sy(market_pool_object: Object<MarketPool>, sy_balance: FungibleAsset) acquires MarketPool {
         let market_pool = borrow_global_mut<MarketPool>(object::object_address(&market_pool_object));
         fungible_asset::deposit(market_pool.total_sy, sy_balance);
@@ -1151,6 +1191,12 @@ module stellaris::market {
     public fun market_expiry(market_pool_object: Object<MarketPool>) : u64 acquires MarketPool {
         let market_pool = borrow_global_mut<MarketPool>(object::object_address(&market_pool_object));
         market_pool.expiry
+    }
+
+    #[view]
+    public fun sy_metadata_address(py_state_object: Object<MarketPool>) :Object<Metadata> acquires MarketPool {
+        let market_pool = borrow_global<MarketPool>(object::object_address(&py_state_object));
+        store_metadata(market_pool.vault)
     }
 
     public(package) fun set_market_last_ln_implied_rate(market_pool: &mut MarketPool, arg1: FixedPoint64) {

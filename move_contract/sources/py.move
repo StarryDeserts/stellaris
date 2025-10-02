@@ -117,6 +117,22 @@ module stellaris::py {
         );
     }
 
+    public entry fun init_py_position_v2(
+        user: &signer,
+        py_state_object: Object<PyState>
+    ) acquires PyState {
+        let py_state = borrow_global<PyState>(object::object_address(&py_state_object));
+        let sy_name = sy_name_internal(py_state);
+        // 调用 py_position 模块的 open_position 函数
+        py_position::open_position(
+            &object::create_object(signer::address_of(user)),
+            signer::address_of(user),
+            object::object_address(&py_state_object),
+            sy_name,
+            py_state.expiry
+        );
+    }
+
     public(package) fun mint_py(
         yt_amount_to_mint: u64,
         pt_amount_to_mint: u64,
@@ -426,6 +442,10 @@ module stellaris::py {
         latest_py_index
     }
 
+    public fun sy_name_internal(py_state: &PyState) :String {
+        fungible_asset::name(store_metadata(py_state.sy_balance))
+    }
+
     #[view]
     public fun expiry(py_state_object: Object<PyState>) :u64 acquires PyState {
         let py_state = borrow_global<PyState>(object::object_address(&py_state_object));
@@ -448,6 +468,12 @@ module stellaris::py {
     public fun sy_metadata_address(py_state_object: Object<PyState>) :Object<Metadata> acquires PyState {
         let py_state = borrow_global<PyState>(object::object_address(&py_state_object));
         store_metadata(py_state.sy_balance)
+    }
+
+    #[view]
+    public fun sy_name(py_state_object: Object<PyState>) :String acquires PyState {
+        let py_state = borrow_global<PyState>(object::object_address(&py_state_object));
+        fungible_asset::name(store_metadata(py_state.sy_balance))
     }
 
     #[view]

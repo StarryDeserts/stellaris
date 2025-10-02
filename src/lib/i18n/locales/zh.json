@@ -1,0 +1,18 @@
+{
+  "common": {
+    "hello": "你好，世界！",
+    "switchLang": "切换到英文"
+  },
+  "navbar":{
+    "markets":"市场",
+    "pools":"流动池",
+    "dashboard":"资产",
+    "faucet":"水龙头"
+  },
+  "markets":{
+    "assent":"资产",
+    "endtime":"到期时间",
+    "token":"枚",
+    "liquidity":"总流动性"
+  }
+}

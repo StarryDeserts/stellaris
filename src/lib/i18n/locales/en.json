@@ -1,0 +1,18 @@
+{
+  "common": {
+    "hello": "Hello, world!",
+    "switchLang": "Switch to Chinese"
+  },
+  "navbar":{
+    "markets":"Markets",
+    "pools":"Pools",
+    "dashboard":"Dashboard",
+    "faucet":"Faucet"
+  },
+  "markets":{
+    "assent":"Assent",
+    "endtime":"endtime",
+    "token":"token",
+    "liquidity":"Total Liquidity"
+  }
+}

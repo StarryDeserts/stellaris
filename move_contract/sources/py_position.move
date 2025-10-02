@@ -1,7 +1,7 @@
 module stellaris::py_position {
 
-    use std::signer;
     use std::string::{Self, String};
+    use std::vector;
     use aptos_std::smart_table::{Self, SmartTable};
     use aptos_std::string_utils::to_string;
     use aptos_framework::event;
@@ -14,7 +14,7 @@ module stellaris::py_position {
     const SCALING_FACTOR:u64 = 100000000;
 
     struct PyPositionRegistry has key {
-        user_position_address: SmartTable<address, address>
+        user_position_address: SmartTable<address, vector<address>>
     }
 
     struct PyPosition has key {
@@ -33,16 +33,25 @@ module stellaris::py_position {
         accured: FixedPoint64,
     }
 
+    struct PyPositionView has copy, drop {
+        py_state_id: address,
+        description: String,
+        yield_token: String,
+        pt_balance_display: String,
+        yt_balance_display: String,
+        expiry_days: u64
+    }
+
     #[event]
     struct CreatePositionEvent has store, drop {
+        owner_address: address,
         position_object_id: address,
-        py_state_id: address,
-        owner_address: address
+        py_state_id: address
     }
 
     fun init_module(publisher: &signer) {
         let py_position_registry = PyPositionRegistry {
-            user_position_address: smart_table::new<address, address>()
+            user_position_address: smart_table::new<address, vector<address>>()
         };
         move_to(&get_signer(), py_position_registry);
     }
@@ -79,12 +88,19 @@ module stellaris::py_position {
         };
         move_to(&signer, py_position);
         let create_position_event = CreatePositionEvent{
+            owner_address: user_address,
             position_object_id: object::address_from_constructor_ref(constructor_ref),
-            py_state_id,
-            owner_address: signer::address_of(&signer)
+            py_state_id
         };
         event::emit<CreatePositionEvent>(create_position_event);
-        py_position_registry.user_position_address.add(user_address, object::address_from_constructor_ref(constructor_ref));
+        if (py_position_registry.user_position_address.contains(user_address)) {
+            let user_position_list = py_position_registry.user_position_address.borrow_mut(user_address);
+            user_position_list.push_back(object::address_from_constructor_ref(constructor_ref));
+        } else {
+            let empty_vector = vector::empty<address>();
+            empty_vector.push_back(object::address_from_constructor_ref(constructor_ref));
+            py_position_registry.user_position_address.add(user_address, empty_vector);
+        };
         object::object_from_constructor_ref<PyPosition>(constructor_ref)
     }
 
@@ -160,7 +176,7 @@ module stellaris::py_position {
 
 
     #[view]
-    public fun get_user_py_position_address(user_address: address) :address acquires PyPositionRegistry {
+    public fun get_user_py_position_address(user_address: address) :vector<address> acquires PyPositionRegistry {
         *borrow_global<PyPositionRegistry>(get_resource_address()).user_position_address.borrow(user_address)
     }
 
@@ -232,6 +248,18 @@ module stellaris::py_position {
         borrow_global<PyPosition>(object::object_address(&position_object)).accured
     }
 
+    #[view]
+    public fun get_py_position_info(position_object: Object<PyPosition>) :PyPositionView acquires PyPosition {
+        let user_py_position = borrow_global<PyPosition>(object::object_address(&position_object));
+        PyPositionView {
+            py_state_id: user_py_position.py_state_id,
+            description: user_py_position.description,
+            yield_token: user_py_position.yield_token,
+            pt_balance_display: user_py_position.pt_balance_display,
+            yt_balance_display: user_py_position.yt_balance_display,
+            expiry_days: user_py_position.expiry_days
+        }
+    }
 
 
 }
